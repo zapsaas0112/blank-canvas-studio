@@ -42,9 +42,13 @@ export function useBroadcasts() {
       contactIds.map(cid => ({ broadcast_id: bc.id, contact_id: cid, status: 'pending' }))
     );
 
+    // Get WhatsApp token from localStorage
+    const savedConn = localStorage.getItem('whatsapp_connection');
+    const whatsappToken = savedConn ? JSON.parse(savedConn)?.token : null;
+
     // Trigger actual message sending via edge function (fire and forget)
     supabase.functions.invoke('broadcast-send', {
-      body: { broadcastId: bc.id },
+      body: { broadcastId: bc.id, token: whatsappToken },
     }).then(({ data, error: sendErr }) => {
       if (sendErr) console.error('Broadcast send error:', sendErr);
       else console.log('Broadcast send result:', data);
