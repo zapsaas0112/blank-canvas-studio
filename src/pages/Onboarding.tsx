@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
@@ -8,25 +8,52 @@ import { Label } from '@/components/ui/label';
 import { MessageSquare, Building2, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
+function buildSlug(name: string) {
+  return name.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+}
+
 export default function Onboarding() {
-  const { user, profile, refreshWorkspace } = useAuth();
+  const { user, profile, refreshWorkspace, hasWorkspace, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [workspaceName, setWorkspaceName] = useState('');
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (!user) navigate('/login', { replace: true });
+    else if (hasWorkspace) navigate('/', { replace: true });
+  }, [authLoading, user, hasWorkspace, navigate]);
+
+  async function createWorkspaceWithUniqueSlug(name: string, ownerId: string) {
+    const baseSlug = buildSlug(name) || 'workspace';
+    const candidates = [
+      baseSlug,
+      `${baseSlug}-${ownerId.slice(0, 6)}`,
+      `${baseSlug}-${ownerId.slice(0, 6)}-${Date.now().toString().slice(-4)}`,
+    ];
+
+    for (const slug of candidates) {
+      const { data: ws, error } = await supabase
+        .from('workspaces')
+        .insert({ name, slug, owner_id: ownerId })
+        .select()
+        .single();
+
+      if (!error && ws) return ws;
+
+      if (!(error?.code === '23505' && error?.message?.includes('workspaces_slug_key'))) {
+        throw error;
+      }
+    }
+
+    throw new Error('Não foi possível criar um slug único para o workspace');
+  }
 
   async function handleCreate() {
     if (!workspaceName.trim() || !user) return;
     setLoading(true);
     try {
-      const slug = workspaceName.trim().toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
-
-      // 1. Create workspace
-      const { data: ws, error: wsErr } = await supabase.from('workspaces').insert({
-        name: workspaceName.trim(),
-        slug,
-        owner_id: user.id,
-      }).select().single();
-      if (wsErr) throw wsErr;
+      const ws = await createWorkspaceWithUniqueSlug(workspaceName.trim(), user.id);
 
       // 2. Add as member (owner)
       const { error: memErr } = await supabase.from('workspace_members').insert({
@@ -49,7 +76,11 @@ export default function Onboarding() {
       toast.success('Workspace criado com sucesso!');
       navigate('/');
     } catch (err: any) {
-      toast.error(err.message || 'Erro ao criar workspace');
+      if (err?.code === '42501') {
+        toast.error('Permissão negada ao criar workspace. Faça login novamente e tente de novo.');
+      } else {
+        toast.error(err?.message || 'Erro ao criar workspace');
+      }
     } finally {
       setLoading(false);
     }
