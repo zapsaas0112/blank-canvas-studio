@@ -32,9 +32,11 @@ serve(async (req) => {
       let statusData: any;
       try { statusData = JSON.parse(statusText); } catch { statusData = {}; }
 
-      // UAZAPI response: { instance: { status: "connected", owner: "55...", profileName: "...", ... }, status: "connected" }
+      // UAZAPI response: { instance: { status: "connected", ... }, status: "connected" }
       const inst = statusData.instance || statusData.data || {};
-      const topStatus = statusData.status || inst.status;
+      const topStatus = String(statusData.status || inst.status || "").trim();
+
+      console.log("[whatsapp-status] topStatus:", JSON.stringify(topStatus), "inst.status:", JSON.stringify(inst.status), "statusData.status:", JSON.stringify(statusData.status));
 
       connected = topStatus === "connected";
       phoneNumber = inst.owner || inst.phone || inst.phone_number || null;
