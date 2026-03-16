@@ -9,92 +9,74 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { instanceName, instanceKey } = await req.json();
-    const SERVER_URL = Deno.env.get("WHATSAPI_SERVER_URL");
+    const body = await req.json().catch(() => ({}));
+    const SERVER_URL = (Deno.env.get("WHATSAPI_SERVER_URL") || "").replace(/\/+$/, "");
     const TOKEN = Deno.env.get("WHATSAPI_TOKEN");
 
-    if (!SERVER_URL || !TOKEN) {
-      throw new Error("WHATSAPI_SERVER_URL ou WHATSAPI_TOKEN não configurados");
+    if (!SERVER_URL || !TOKEN) throw new Error("WHATSAPI_SERVER_URL ou WHATSAPI_TOKEN não configurados");
+
+    // UAZAPI: Check current status
+    const statusRes = await fetch(`${SERVER_URL}/instance/status`, { method: "GET", headers: { "token": TOKEN } });
+    let d: any = {};
+    if (statusRes.ok) {
+      try { d = await statusRes.json(); } catch {}
     }
 
-    let instance_key = instanceKey;
+    const inst = d?.instance || {};
+    const instKey = inst.id || body.instanceKey || body.instanceName || "default";
+    const isConnected = inst.status === "connected" || d?.status?.connected === true;
 
-    // If no instance key, create a new instance
-    if (!instance_key) {
-      const createRes = await fetch(`${SERVER_URL}/api/instances/create`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "token": TOKEN },
-        body: JSON.stringify({
-          instance_key: instanceName?.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") || undefined,
-        }),
-      });
+    console.log("[connect] instKey:", instKey, "connected:", isConnected);
 
-      const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(createData.error?.message || createData.message || "Erro ao criar instância");
-
-      instance_key = createData.instance_key || createData.key || createData.data?.instance_key;
-      if (!instance_key) throw new Error("Chave da instância não retornada");
+    if (isConnected) {
+      return new Response(JSON.stringify({
+        success: true,
+        instanceKey: instKey,
+        qrCode: null,
+        status: "connected",
+        phoneNumber: inst.owner || null,
+        profileName: inst.profileName || inst.name || null,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // Get QR code
-    const qrRes = await fetch(`${SERVER_URL}/api/instances/${instance_key}/qrcode`, {
-      method: "GET",
-      headers: { "token": TOKEN },
-    });
-
+    // Not connected — get QR code
     let qrCode = null;
     let status = "waiting_qr";
 
-    if (qrRes.ok) {
-      const qrData = await qrRes.json();
-      qrCode = qrData.qrcode || qrData.qr || qrData.data?.qrcode || qrData.data?.qr || null;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 2000));
 
-      // If qrcode is a full data URI, extract the base64 part
-      if (qrCode && qrCode.startsWith("data:image")) {
-        // Keep as-is for display
-      }
+      const qrRes = await fetch(`${SERVER_URL}/instance/qrcode`, { method: "GET", headers: { "token": TOKEN } });
+      if (qrRes.ok) {
+        let qd: any;
+        try { qd = await qrRes.json(); } catch { continue; }
 
-      // Check if already connected
-      if (qrData.status === "connected" || qrData.data?.status === "connected") {
-        status = "connected";
-        qrCode = null;
-      } else if (qrCode) {
-        status = "qr_ready";
-      }
-    }
+        const qi = qd?.instance || {};
+        console.log("[connect] QR attempt", attempt, "inst.status:", qi.status, "has qrcode:", !!qi.qrcode);
 
-    // If no QR yet, try polling a few times
-    if (!qrCode && status !== "connected") {
-      for (let i = 0; i < 3; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        const retryRes = await fetch(`${SERVER_URL}/api/instances/${instance_key}/qrcode`, {
-          method: "GET",
-          headers: { "token": TOKEN },
-        });
-        if (retryRes.ok) {
-          const retryData = await retryRes.json();
-          qrCode = retryData.qrcode || retryData.qr || retryData.data?.qrcode || retryData.data?.qr || null;
-          if (retryData.status === "connected" || retryData.data?.status === "connected") {
-            status = "connected";
-            qrCode = null;
-            break;
-          }
-          if (qrCode) {
-            status = "qr_ready";
-            break;
-          }
+        if (qi.status === "connected" || qd?.status?.connected === true) {
+          status = "connected";
+          qrCode = null;
+          break;
+        }
+
+        qrCode = qi.qrcode || qd.qrcode || qd.qr || qd.base64 || null;
+        if (qrCode && qrCode.length > 10) {
+          status = "qr_ready";
+          break;
         }
       }
     }
 
-    return new Response(
-      JSON.stringify({ success: true, instanceKey: instance_key, qrCode, status }),
-      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  } catch (error) {
-    return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({
+      success: true,
+      instanceKey: instKey,
+      qrCode,
+      status,
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  } catch (error: any) {
+    console.error("[connect] Error:", error.message);
+    return new Response(JSON.stringify({ error: error.message }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 });

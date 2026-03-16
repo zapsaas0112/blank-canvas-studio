@@ -10,24 +10,28 @@ serve(async (req) => {
 
   try {
     const { instanceKey } = await req.json();
-    const SERVER_URL = Deno.env.get("WHATSAPI_SERVER_URL");
+    const SERVER_URL = (Deno.env.get("WHATSAPI_SERVER_URL") || "").replace(/\/+$/, "");
     const TOKEN = Deno.env.get("WHATSAPI_TOKEN");
 
     if (!SERVER_URL || !TOKEN) throw new Error("Credenciais não configuradas");
-    if (!instanceKey) throw new Error("instanceKey é obrigatório");
 
-    const res = await fetch(`${SERVER_URL}/api/instances/${instanceKey}/delete`, {
+    const url = `${SERVER_URL}/instance/delete`;
+    console.log("[whatsapp-delete] Calling:", url);
+
+    const res = await fetch(url, {
       method: "DELETE",
-      headers: { "Content-Type": "application/json", "token": TOKEN },
+      headers: { "Content-Type": "application/json", "admintoken": TOKEN },
     });
 
-    const data = await res.json();
+    const text = await res.text();
+    console.log("[whatsapp-delete] Response:", res.status, text.substring(0, 300));
 
     return new Response(
-      JSON.stringify({ success: true, message: "Instância deletada permanentemente", data }),
+      JSON.stringify({ success: true }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
+    console.error("[whatsapp-delete] Error:", error.message);
     return new Response(
       JSON.stringify({ error: error.message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }

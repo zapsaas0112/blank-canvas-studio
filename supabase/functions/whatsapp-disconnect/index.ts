@@ -10,25 +10,30 @@ serve(async (req) => {
 
   try {
     const { instanceKey } = await req.json();
-    const SERVER_URL = Deno.env.get("WHATSAPI_SERVER_URL");
+    const SERVER_URL = (Deno.env.get("WHATSAPI_SERVER_URL") || "").replace(/\/+$/, "");
     const TOKEN = Deno.env.get("WHATSAPI_TOKEN");
 
     if (!SERVER_URL || !TOKEN) throw new Error("Credenciais não configuradas");
-    if (!instanceKey) throw new Error("instanceKey é obrigatório");
 
-    // WhatsAPI.my uses logout to disconnect
-    const res = await fetch(`${SERVER_URL}/api/instances/${instanceKey}/logout`, {
-      method: "DELETE",
+    const url = `${SERVER_URL}/instance/disconnect`;
+    console.log("[whatsapp-disconnect] Calling:", url);
+
+    const res = await fetch(url, {
+      method: "POST",
       headers: { "Content-Type": "application/json", "token": TOKEN },
     });
 
-    const data = await res.json();
+    const text = await res.text();
+    console.log("[whatsapp-disconnect] Response:", res.status, text.substring(0, 300));
+
+    if (!res.ok) throw new Error(`Erro (${res.status}): ${text}`);
 
     return new Response(
-      JSON.stringify({ success: true, message: "Instância desconectada", data }),
+      JSON.stringify({ success: true }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
+    console.error("[whatsapp-disconnect] Error:", error.message);
     return new Response(
       JSON.stringify({ error: error.message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
