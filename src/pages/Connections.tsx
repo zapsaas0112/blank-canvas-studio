@@ -152,7 +152,7 @@ export default function Connections() {
 
               {activeQr?.instanceId === inst.id && activeQr.qrCode && (
                 <div className="text-center py-2">
-                  <img src={`data:image/png;base64,${activeQr.qrCode}`} alt="QR Code" className="w-48 h-48 mx-auto rounded-xl border-2 border-border" />
+                  <img src={activeQr.qrCode.startsWith('data:') ? activeQr.qrCode : `data:image/png;base64,${activeQr.qrCode}`} alt="QR Code" className="w-48 h-48 mx-auto rounded-xl border-2 border-border" />
                   <p className="text-xs text-muted-foreground mt-2 animate-pulse">Escaneie com WhatsApp</p>
                 </div>
               )}
