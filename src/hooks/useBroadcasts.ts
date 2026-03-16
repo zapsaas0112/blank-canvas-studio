@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import * as whatsappService from '@/services/whatsappService';
 import type { Broadcast } from '@/types/database';
 
 export function useBroadcasts() {
@@ -24,6 +25,11 @@ export function useBroadcasts() {
 
   async function create(name: string, message: string, contactIds: string[]) {
     if (!workspace) return;
+
+    // Validate WhatsApp is connected
+    const conn = await whatsappService.getActiveToken();
+    if (!conn) throw new Error("WhatsApp não conectado. Conecte primeiro na página de Conexões.");
+
     const { data: bc, error } = await supabase.from('broadcasts').insert({
       name, message,
       workspace_id: workspace.id,
@@ -34,7 +40,6 @@ export function useBroadcasts() {
 
     if (error || !bc) throw error || new Error('Failed to create broadcast');
 
-    // Insert recipients in both tables for compatibility
     await supabase.from('broadcast_contacts').insert(
       contactIds.map(cid => ({ broadcast_id: bc.id, contact_id: cid, status: 'pending' }))
     );
@@ -42,17 +47,13 @@ export function useBroadcasts() {
       contactIds.map(cid => ({ broadcast_id: bc.id, contact_id: cid, status: 'pending' }))
     );
 
-    // Get WhatsApp token from localStorage
-    const savedConn = localStorage.getItem('whatsapp_connection');
-    const whatsappToken = savedConn ? JSON.parse(savedConn)?.token : null;
-
-    // Trigger actual message sending via edge function (fire and forget)
+    // Fire and forget with token
     supabase.functions.invoke('broadcast-send', {
-      body: { broadcastId: bc.id, token: whatsappToken },
+      body: { broadcastId: bc.id, token: conn.token },
     }).then(({ data, error: sendErr }) => {
       if (sendErr) console.error('Broadcast send error:', sendErr);
       else console.log('Broadcast send result:', data);
-      fetch(); // Refresh after sending completes
+      fetch();
     });
 
     await fetch();

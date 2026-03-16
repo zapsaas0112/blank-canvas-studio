@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { normalizeWhatsAppNumber } from '@/lib/whatsapp-utils';
 import type { Contact } from '@/types/database';
 
 export function useContacts() {
@@ -24,14 +25,18 @@ export function useContacts() {
 
   async function create(name: string, phone: string) {
     if (!workspace) return;
+    const normalized = normalizeWhatsAppNumber(phone);
     const { error } = await supabase.from('customers').insert({
-      name, phone, workspace_id: workspace.id,
+      name, phone: normalized, workspace_id: workspace.id,
     });
     if (error) throw error;
     await fetch();
   }
 
   async function update(id: string, data: Partial<Contact>) {
+    if (data.phone) {
+      data = { ...data, phone: normalizeWhatsAppNumber(data.phone) };
+    }
     const { error } = await supabase.from('customers').update(data).eq('id', id);
     if (error) throw error;
     await fetch();
@@ -39,9 +44,12 @@ export function useContacts() {
 
   async function importContacts(rows: { name: string; phone: string }[]) {
     if (!workspace) return;
-    const { error } = await supabase.from('customers').insert(
-      rows.map(r => ({ ...r, workspace_id: workspace.id }))
-    );
+    const normalized = rows.map(r => ({
+      name: r.name,
+      phone: normalizeWhatsAppNumber(r.phone),
+      workspace_id: workspace.id,
+    }));
+    const { error } = await supabase.from('customers').insert(normalized);
     if (error) throw error;
     await fetch();
   }

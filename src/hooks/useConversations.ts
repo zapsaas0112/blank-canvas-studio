@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
+import { normalizeWhatsAppNumber } from '@/lib/whatsapp-utils';
+import * as whatsappService from '@/services/whatsappService';
 import type { Conversation, Message } from '@/types/database';
 
 export function useConversations() {
@@ -75,17 +77,47 @@ export function useConversationMessages(conversationId: string | null) {
 
   useEffect(() => { fetch(); }, [fetch]);
 
-  async function send(content: string, senderId: string, workspaceId: string) {
+  /**
+   * Send message: saves to DB AND sends via WhatsApp
+   */
+  async function send(content: string, senderId: string, workspaceId: string, customerPhone?: string) {
     if (!conversationId) return;
-    await supabase.from('messages').insert({
+
+    // 1. Save message to DB with status 'sending'
+    const { data: msgRow, error: insertErr } = await supabase.from('messages').insert({
       conversation_id: conversationId,
       sender_type: 'agent',
       sender_id: senderId,
       content,
       message_type: 'text',
       workspace_id: workspaceId,
-    });
+      status: 'sending',
+    }).select('id').single();
+
+    if (insertErr) throw insertErr;
+
+    // 2. Update conversation timestamp
     await supabase.from('conversations').update({ last_message_at: new Date().toISOString() }).eq('id', conversationId);
+
+    // 3. Send via WhatsApp if phone available
+    if (customerPhone) {
+      try {
+        const result = await whatsappService.sendWhatsAppMessage(customerPhone, content);
+
+        if (result.success) {
+          await supabase.from('messages').update({ status: 'sent' }).eq('id', msgRow.id);
+        } else {
+          await supabase.from('messages').update({ status: 'failed' }).eq('id', msgRow.id);
+        }
+      } catch (err: any) {
+        console.error('WhatsApp send failed:', err);
+        await supabase.from('messages').update({ status: 'failed' }).eq('id', msgRow.id);
+      }
+    } else {
+      // No phone = internal only, mark as sent
+      await supabase.from('messages').update({ status: 'sent' }).eq('id', msgRow.id);
+    }
+
     await fetch();
   }
 

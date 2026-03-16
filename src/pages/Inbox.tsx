@@ -28,6 +28,7 @@ export default function Inbox() {
   const [searchTerm, setSearchTerm] = useState('');
   const [newMessage, setNewMessage] = useState('');
   const [showMobileChat, setShowMobileChat] = useState(false);
+  const [sending, setSending] = useState(false);
 
   useEffect(() => {
     if (!workspace) return;
@@ -49,8 +50,18 @@ export default function Inbox() {
 
   async function handleSend() {
     if (!selectedConv || !user || !newMessage.trim() || !workspace) return;
-    await send(newMessage.trim(), user.id, workspace.id);
-    setNewMessage('');
+    const selected = conversations.find(c => c.id === selectedConv);
+    const customerPhone = selected?.customer?.phone || undefined;
+
+    setSending(true);
+    try {
+      await send(newMessage.trim(), user.id, workspace.id, customerPhone);
+      setNewMessage('');
+    } catch (err: any) {
+      toast.error(err?.message || 'Erro ao enviar');
+    } finally {
+      setSending(false);
+    }
   }
 
   async function handleAssign(convId: string) {
@@ -110,7 +121,7 @@ export default function Inbox() {
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     <p className="text-xs text-muted-foreground truncate flex-1">{conv.customer?.phone}</p>
-                    <div className={cn('w-2 h-2 rounded-full shrink-0', conv.status === 'open' ? 'bg-primary' : conv.status === 'unassigned' ? 'bg-warning' : 'bg-muted-foreground/30')} />
+                    <div className={cn('w-2 h-2 rounded-full shrink-0', conv.status === 'open' ? 'bg-primary' : conv.status === 'unassigned' ? 'bg-yellow-500' : 'bg-muted-foreground/30')} />
                   </div>
                 </div>
               </button>
@@ -145,7 +156,13 @@ export default function Inbox() {
                       <p>{msg.content}</p>
                       <div className={cn('flex items-center gap-1 mt-1', msg.sender_type === 'agent' ? 'justify-end' : 'justify-start')}>
                         <span className="text-[10px] opacity-60">{format(new Date(msg.created_at), 'HH:mm')}</span>
-                        {msg.sender_type === 'agent' && (msg.status === 'read' ? <CheckCheck className="w-3 h-3 text-secondary" /> : msg.status === 'delivered' ? <CheckCheck className="w-3 h-3 opacity-60" /> : <Check className="w-3 h-3 opacity-60" />)}
+                        {msg.sender_type === 'agent' && (
+                          msg.status === 'read' ? <CheckCheck className="w-3 h-3 text-secondary" /> :
+                          msg.status === 'delivered' ? <CheckCheck className="w-3 h-3 opacity-60" /> :
+                          msg.status === 'failed' ? <X className="w-3 h-3 text-destructive" /> :
+                          msg.status === 'sending' ? <div className="w-3 h-3 border border-current border-t-transparent rounded-full animate-spin opacity-60" /> :
+                          <Check className="w-3 h-3 opacity-60" />
+                        )}
                       </div>
                     </div>
                   </div>
@@ -154,8 +171,10 @@ export default function Inbox() {
               <div className="p-3 border-t border-border">
                 <div className="flex items-center gap-2">
                   <Button variant="ghost" size="icon" className="shrink-0 text-muted-foreground h-9 w-9"><Paperclip className="w-4 h-4" /></Button>
-                  <Input placeholder="Digite uma mensagem..." value={newMessage} onChange={e => setNewMessage(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()} className="bg-muted/50 border-border h-9 text-sm" />
-                  <Button size="icon" className="shrink-0 h-9 w-9" onClick={handleSend} disabled={!newMessage.trim()}><Send className="w-4 h-4" /></Button>
+                  <Input placeholder="Digite uma mensagem..." value={newMessage} onChange={e => setNewMessage(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()} className="bg-muted/50 border-border h-9 text-sm" disabled={sending} />
+                  <Button size="icon" className="shrink-0 h-9 w-9" onClick={handleSend} disabled={!newMessage.trim() || sending}>
+                    {sending ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" /> : <Send className="w-4 h-4" />}
+                  </Button>
                 </div>
               </div>
             </>
