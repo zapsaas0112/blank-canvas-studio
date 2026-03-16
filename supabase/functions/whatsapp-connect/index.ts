@@ -19,22 +19,24 @@ serve(async (req) => {
 
     let instance_key = instanceKey;
 
-    // If no instance key, create a new instance
+    // If no instance key, create a new instance via UAZAPI endpoint
     if (!instance_key) {
-      const slug = instanceName?.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") || undefined;
-      const createUrl = slug
-        ? `${SERVER_URL}/api/instances/create?instance_key=${encodeURIComponent(slug)}`
-        : `${SERVER_URL}/api/instances/create`;
+      const slug = instanceName?.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") || "instance";
+      const createUrl = `${SERVER_URL}/instance/init`;
 
       console.log("[whatsapp-connect] Creating instance at:", createUrl);
 
       const createRes = await fetch(createUrl, {
         method: "POST",
-        headers: { "Content-Type": "application/json", "token": TOKEN },
+        headers: {
+          "Content-Type": "application/json",
+          "admintoken": TOKEN,
+        },
+        body: JSON.stringify({ instance_key: slug }),
       });
 
       const createText = await createRes.text();
-      console.log("[whatsapp-connect] Create response status:", createRes.status, "body:", createText);
+      console.log("[whatsapp-connect] Create response:", createRes.status, createText.substring(0, 500));
 
       if (!createRes.ok) {
         throw new Error(`Erro ao criar instância (${createRes.status}): ${createText}`);
@@ -43,17 +45,15 @@ serve(async (req) => {
       let createData;
       try { createData = JSON.parse(createText); } catch { throw new Error(`Resposta inválida: ${createText}`); }
 
-      instance_key = createData.instance_key || createData.key || createData.data?.instance_key;
-      if (!instance_key) {
-        console.log("[whatsapp-connect] Full create response:", JSON.stringify(createData));
-        throw new Error("Chave da instância não retornada na resposta");
-      }
+      // UAZAPI returns the instance data - extract the key/token
+      instance_key = createData.instance_key || createData.key || createData.data?.instance_key || createData.instance?.key || slug;
+      const instanceToken = createData.token || createData.instance?.token || createData.data?.token || null;
+
+      console.log("[whatsapp-connect] Created instance_key:", instance_key, "token:", instanceToken ? "present" : "absent");
     }
 
-    console.log("[whatsapp-connect] Instance key:", instance_key);
-
-    // Get QR code
-    const qrUrl = `${SERVER_URL}/api/instances/${encodeURIComponent(instance_key)}/qrcode`;
+    // Get QR code via UAZAPI endpoint
+    const qrUrl = `${SERVER_URL}/instance/qrcode`;
     console.log("[whatsapp-connect] Getting QR from:", qrUrl);
 
     const qrRes = await fetch(qrUrl, {
@@ -62,7 +62,7 @@ serve(async (req) => {
     });
 
     const qrText = await qrRes.text();
-    console.log("[whatsapp-connect] QR response status:", qrRes.status, "body length:", qrText.length);
+    console.log("[whatsapp-connect] QR response:", qrRes.status, qrText.substring(0, 300));
 
     let qrCode = null;
     let status = "waiting_qr";
@@ -75,7 +75,7 @@ serve(async (req) => {
 
       qrCode = qrData.qrcode || qrData.qr || qrData.data?.qrcode || qrData.data?.qr || qrData.base64 || null;
 
-      if (qrData.status === "connected" || qrData.data?.status === "connected") {
+      if (qrData.status === "connected" || qrData.data?.status === "connected" || qrData.connected === true) {
         status = "connected";
         qrCode = null;
       } else if (qrCode) {
@@ -83,7 +83,7 @@ serve(async (req) => {
       }
     }
 
-    // If no QR yet, retry a couple times
+    // If no QR yet, retry
     if (!qrCode && status !== "connected") {
       for (let i = 0; i < 3; i++) {
         await new Promise((r) => setTimeout(r, 2000));
@@ -93,19 +93,11 @@ serve(async (req) => {
           const retryText = await retryRes.text();
           let retryData;
           try { retryData = JSON.parse(retryText); } catch { continue; }
-
-          console.log("[whatsapp-connect] Retry data keys:", Object.keys(retryData));
-
           qrCode = retryData.qrcode || retryData.qr || retryData.data?.qrcode || retryData.data?.qr || retryData.base64 || null;
-          if (retryData.status === "connected" || retryData.data?.status === "connected") {
-            status = "connected";
-            qrCode = null;
-            break;
+          if (retryData.status === "connected" || retryData.data?.status === "connected" || retryData.connected === true) {
+            status = "connected"; qrCode = null; break;
           }
-          if (qrCode) {
-            status = "qr_ready";
-            break;
-          }
+          if (qrCode) { status = "qr_ready"; break; }
         }
       }
     }

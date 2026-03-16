@@ -16,45 +16,45 @@ serve(async (req) => {
     if (!SERVER_URL || !TOKEN) throw new Error("Credenciais não configuradas");
     if (!instanceKey) throw new Error("instanceKey é obrigatório");
 
-    // Try info endpoint first
-    const infoUrl = `${SERVER_URL}/api/instances/${encodeURIComponent(instanceKey)}/info`;
-    console.log("[whatsapp-status] Checking info:", infoUrl);
+    // Try UAZAPI status endpoint
+    const statusUrl = `${SERVER_URL}/instance/status`;
+    console.log("[whatsapp-status] Checking:", statusUrl);
 
-    const infoRes = await fetch(infoUrl, { method: "GET", headers: { "token": TOKEN } });
-    const infoText = await infoRes.text();
-    console.log("[whatsapp-status] Info response:", infoRes.status, infoText.substring(0, 500));
+    const statusRes = await fetch(statusUrl, { method: "GET", headers: { "token": TOKEN } });
+    const statusText = await statusRes.text();
+    console.log("[whatsapp-status] Status response:", statusRes.status, statusText.substring(0, 500));
 
     let connected = false;
     let phoneNumber = null;
     let profileName = null;
     let qrCode = null;
 
-    if (infoRes.ok) {
-      let infoData;
-      try { infoData = JSON.parse(infoText); } catch { infoData = {}; }
+    if (statusRes.ok) {
+      let statusData;
+      try { statusData = JSON.parse(statusText); } catch { statusData = {}; }
 
-      const instanceInfo = infoData.instance_data || infoData.data || infoData;
-      connected = instanceInfo.connected === true ||
-                  instanceInfo.status === "connected" ||
-                  infoData.status === "connected" ||
-                  instanceInfo.phone_connected === true;
-      phoneNumber = instanceInfo.phone || instanceInfo.phone_number || instanceInfo.user?.id?.split(":")?.[0] || null;
-      profileName = instanceInfo.name || instanceInfo.user?.name || instanceInfo.pushname || null;
+      console.log("[whatsapp-status] Data keys:", Object.keys(statusData));
+
+      const instance = statusData.instance_data || statusData.data || statusData;
+      connected = instance.connected === true ||
+                  instance.status === "connected" ||
+                  statusData.status === "connected" ||
+                  instance.phone_connected === true;
+      phoneNumber = instance.phone || instance.phone_number || instance.user?.id?.split(":")?.[0] || null;
+      profileName = instance.name || instance.user?.name || instance.pushname || null;
     }
 
-    // If not connected, try QR endpoint
+    // If not connected, try QR
     if (!connected) {
-      const qrUrl = `${SERVER_URL}/api/instances/${encodeURIComponent(instanceKey)}/qrcode`;
+      const qrUrl = `${SERVER_URL}/instance/qrcode`;
       console.log("[whatsapp-status] Getting QR:", qrUrl);
       const qrRes = await fetch(qrUrl, { method: "GET", headers: { "token": TOKEN } });
       if (qrRes.ok) {
         const qrText = await qrRes.text();
         let qrData;
         try { qrData = JSON.parse(qrText); } catch { qrData = {}; }
-
-        console.log("[whatsapp-status] QR data keys:", Object.keys(qrData));
-
-        if (qrData.status === "connected" || qrData.data?.status === "connected") {
+        console.log("[whatsapp-status] QR keys:", Object.keys(qrData));
+        if (qrData.status === "connected" || qrData.connected === true) {
           connected = true;
         } else {
           qrCode = qrData.qrcode || qrData.qr || qrData.data?.qrcode || qrData.data?.qr || qrData.base64 || null;
