@@ -90,9 +90,9 @@ export default function Connections() {
   }
 
   async function handleDisconnect(inst: Instance) {
-    if (!inst.token) return;
+    if (!inst.instance_id_external) return;
     try {
-      await whatsappService.disconnectInstance(inst.token);
+      await whatsappService.disconnectInstance(inst.instance_id_external);
       await updateInstance(inst.id, { status: 'disconnected', is_active: false });
       toast.success('Desconectado');
       await refetch();
