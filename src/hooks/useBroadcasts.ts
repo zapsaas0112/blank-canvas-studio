@@ -42,6 +42,15 @@ export function useBroadcasts() {
       contactIds.map(cid => ({ broadcast_id: bc.id, contact_id: cid, status: 'pending' }))
     );
 
+    // Trigger actual message sending via edge function (fire and forget)
+    supabase.functions.invoke('broadcast-send', {
+      body: { broadcastId: bc.id },
+    }).then(({ data, error: sendErr }) => {
+      if (sendErr) console.error('Broadcast send error:', sendErr);
+      else console.log('Broadcast send result:', data);
+      fetch(); // Refresh after sending completes
+    });
+
     await fetch();
     return bc;
   }
