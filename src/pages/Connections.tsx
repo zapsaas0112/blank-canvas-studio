@@ -50,10 +50,10 @@ export default function Connections() {
   }
 
   async function handleConnect(inst: Instance) {
-    if (!inst.token) { toast.error('Token não encontrado'); return; }
+    if (!inst.instance_id_external) { toast.error('Chave da instância não encontrada'); return; }
     setPolling(inst.id);
     try {
-      const result = await whatsappService.connectInstance(inst.token);
+      const result = await whatsappService.connectInstance(inst.instance_id_external);
       if (result.qrCode) {
         setActiveQr({ instanceId: inst.id, qrCode: result.qrCode });
         await updateInstance(inst.id, { qr_code: result.qrCode });
