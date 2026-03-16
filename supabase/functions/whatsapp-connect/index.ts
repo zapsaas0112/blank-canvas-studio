@@ -10,7 +10,7 @@ serve(async (req) => {
 
   try {
     const { instanceName, instanceKey } = await req.json();
-    const SERVER_URL = Deno.env.get("WHATSAPI_SERVER_URL");
+    const SERVER_URL = (Deno.env.get("WHATSAPI_SERVER_URL") || "").replace(/\/+$/, "");
     const TOKEN = Deno.env.get("WHATSAPI_TOKEN");
 
     if (!SERVER_URL || !TOKEN) {
@@ -21,40 +21,60 @@ serve(async (req) => {
 
     // If no instance key, create a new instance
     if (!instance_key) {
-      const createRes = await fetch(`${SERVER_URL}/api/instances/create`, {
+      const slug = instanceName?.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") || undefined;
+      const createUrl = slug
+        ? `${SERVER_URL}/api/instances/create?instance_key=${encodeURIComponent(slug)}`
+        : `${SERVER_URL}/api/instances/create`;
+
+      console.log("[whatsapp-connect] Creating instance at:", createUrl);
+
+      const createRes = await fetch(createUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json", "token": TOKEN },
-        body: JSON.stringify({
-          instance_key: instanceName?.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") || undefined,
-        }),
       });
 
-      const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(createData.error?.message || createData.message || "Erro ao criar instância");
+      const createText = await createRes.text();
+      console.log("[whatsapp-connect] Create response status:", createRes.status, "body:", createText);
+
+      if (!createRes.ok) {
+        throw new Error(`Erro ao criar instância (${createRes.status}): ${createText}`);
+      }
+
+      let createData;
+      try { createData = JSON.parse(createText); } catch { throw new Error(`Resposta inválida: ${createText}`); }
 
       instance_key = createData.instance_key || createData.key || createData.data?.instance_key;
-      if (!instance_key) throw new Error("Chave da instância não retornada");
+      if (!instance_key) {
+        console.log("[whatsapp-connect] Full create response:", JSON.stringify(createData));
+        throw new Error("Chave da instância não retornada na resposta");
+      }
     }
 
+    console.log("[whatsapp-connect] Instance key:", instance_key);
+
     // Get QR code
-    const qrRes = await fetch(`${SERVER_URL}/api/instances/${instance_key}/qrcode`, {
+    const qrUrl = `${SERVER_URL}/api/instances/${encodeURIComponent(instance_key)}/qrcode`;
+    console.log("[whatsapp-connect] Getting QR from:", qrUrl);
+
+    const qrRes = await fetch(qrUrl, {
       method: "GET",
       headers: { "token": TOKEN },
     });
+
+    const qrText = await qrRes.text();
+    console.log("[whatsapp-connect] QR response status:", qrRes.status, "body length:", qrText.length);
 
     let qrCode = null;
     let status = "waiting_qr";
 
     if (qrRes.ok) {
-      const qrData = await qrRes.json();
-      qrCode = qrData.qrcode || qrData.qr || qrData.data?.qrcode || qrData.data?.qr || null;
+      let qrData;
+      try { qrData = JSON.parse(qrText); } catch { qrData = {}; }
 
-      // If qrcode is a full data URI, extract the base64 part
-      if (qrCode && qrCode.startsWith("data:image")) {
-        // Keep as-is for display
-      }
+      console.log("[whatsapp-connect] QR data keys:", Object.keys(qrData));
 
-      // Check if already connected
+      qrCode = qrData.qrcode || qrData.qr || qrData.data?.qrcode || qrData.data?.qr || qrData.base64 || null;
+
       if (qrData.status === "connected" || qrData.data?.status === "connected") {
         status = "connected";
         qrCode = null;
@@ -63,17 +83,20 @@ serve(async (req) => {
       }
     }
 
-    // If no QR yet, try polling a few times
+    // If no QR yet, retry a couple times
     if (!qrCode && status !== "connected") {
       for (let i = 0; i < 3; i++) {
         await new Promise((r) => setTimeout(r, 2000));
-        const retryRes = await fetch(`${SERVER_URL}/api/instances/${instance_key}/qrcode`, {
-          method: "GET",
-          headers: { "token": TOKEN },
-        });
+        console.log("[whatsapp-connect] QR retry", i + 1);
+        const retryRes = await fetch(qrUrl, { method: "GET", headers: { "token": TOKEN } });
         if (retryRes.ok) {
-          const retryData = await retryRes.json();
-          qrCode = retryData.qrcode || retryData.qr || retryData.data?.qrcode || retryData.data?.qr || null;
+          const retryText = await retryRes.text();
+          let retryData;
+          try { retryData = JSON.parse(retryText); } catch { continue; }
+
+          console.log("[whatsapp-connect] Retry data keys:", Object.keys(retryData));
+
+          qrCode = retryData.qrcode || retryData.qr || retryData.data?.qrcode || retryData.data?.qr || retryData.base64 || null;
           if (retryData.status === "connected" || retryData.data?.status === "connected") {
             status = "connected";
             qrCode = null;
@@ -92,6 +115,7 @@ serve(async (req) => {
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
+    console.error("[whatsapp-connect] Error:", error.message);
     return new Response(
       JSON.stringify({ error: error.message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
