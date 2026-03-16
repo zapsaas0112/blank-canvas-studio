@@ -5,53 +5,98 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-type SendCandidate = {
+type HttpMethod = "POST" | "PUT" | "GET";
+
+type SendAttempt = {
   name: string;
-  method: "POST" | "GET";
+  method: HttpMethod;
   path: string;
   body?: Record<string, unknown>;
 };
 
+let preferredAttemptName: string | null = null;
+
+function buildAttempts(phone: string, message: string): SendAttempt[] {
+  const basePaths = [
+    "/message/send-text",
+    "/message/sendText",
+    "/message/send",
+    "/messages/send-text",
+    "/messages/sendText",
+    "/send/text",
+    "/sendText",
+  ];
+
+  const methods: HttpMethod[] = ["POST", "PUT"];
+  const attempts: SendAttempt[] = [];
+
+  for (const path of basePaths) {
+    for (const method of methods) {
+      attempts.push({ name: `${method} ${path} {phone,message}`, method, path, body: { phone, message } });
+      attempts.push({ name: `${method} ${path} {number,text}`, method, path, body: { number: phone, text: message } });
+      attempts.push({ name: `${method} ${path}/${phone} {message}`, method, path: `${path}/${phone}`, body: { message } });
+      attempts.push({ name: `${method} ${path}/${phone} {text}`, method, path: `${path}/${phone}`, body: { text: message } });
+    }
+  }
+
+  attempts.push({
+    name: "GET /message/send-text?phone&message",
+    method: "GET",
+    path: `/message/send-text?phone=${encodeURIComponent(phone)}&message=${encodeURIComponent(message)}`,
+  });
+
+  attempts.push({
+    name: "GET /send/text?phone&message",
+    method: "GET",
+    path: `/send/text?phone=${encodeURIComponent(phone)}&message=${encodeURIComponent(message)}`,
+  });
+
+  return attempts;
+}
+
+async function performAttempt(serverUrl: string, token: string, attempt: SendAttempt) {
+  const response = await fetch(`${serverUrl}${attempt.path}`, {
+    method: attempt.method,
+    headers: {
+      "Content-Type": "application/json",
+      token,
+      Authorization: `Bearer ${token}`,
+    },
+    body: attempt.method === "GET" ? undefined : JSON.stringify(attempt.body ?? {}),
+  });
+
+  const raw = await response.text();
+  return { ok: response.ok, status: response.status, raw };
+}
+
 async function trySendMessage(serverUrl: string, token: string, phone: string, message: string) {
   const cleanPhone = phone.replace(/\D/g, "");
+  const allAttempts = buildAttempts(cleanPhone, message);
 
-  const candidates: SendCandidate[] = [
-    { name: "POST /message/send-text {phone,message}", method: "POST", path: "/message/send-text", body: { phone: cleanPhone, message } },
-    { name: "POST /message/send-text {number,text}", method: "POST", path: "/message/send-text", body: { number: cleanPhone, text: message } },
-    { name: "POST /message/sendText {phone,message}", method: "POST", path: "/message/sendText", body: { phone: cleanPhone, message } },
-    { name: "POST /message/sendText {number,text}", method: "POST", path: "/message/sendText", body: { number: cleanPhone, text: message } },
-    { name: "POST /message/send {phone,message}", method: "POST", path: "/message/send", body: { phone: cleanPhone, message } },
-    {
-      name: "GET /message/send-text?phone&message",
-      method: "GET",
-      path: `/message/send-text?phone=${encodeURIComponent(cleanPhone)}&message=${encodeURIComponent(message)}`,
-    },
-  ];
+  const sortedAttempts = preferredAttemptName
+    ? [...allAttempts].sort((a, b) => (a.name === preferredAttemptName ? -1 : b.name === preferredAttemptName ? 1 : 0))
+    : allAttempts;
 
   const errors: string[] = [];
 
-  for (const attempt of candidates) {
+  for (const attempt of sortedAttempts) {
     try {
-      const response = await fetch(`${serverUrl}${attempt.path}`, {
-        method: attempt.method,
-        headers: {
-          "Content-Type": "application/json",
-          token,
-          Authorization: `Bearer ${token}`,
-        },
-        body: attempt.method === "POST" ? JSON.stringify(attempt.body ?? {}) : undefined,
-      });
+      const result = await performAttempt(serverUrl, token, attempt);
+      console.log(`[whatsapp-send] ${attempt.name} => ${result.status} ${result.raw.substring(0, 180)}`);
 
-      const raw = await response.text();
-      console.log(`[whatsapp-send] ${attempt.name} => ${response.status} ${raw.substring(0, 200)}`);
-
-      if (response.ok) {
+      if (result.ok) {
+        preferredAttemptName = attempt.name;
         let data: Record<string, unknown> = {};
-        try { data = JSON.parse(raw); } catch {}
+        try {
+          data = JSON.parse(result.raw);
+        } catch {
+          data = { raw: result.raw };
+        }
+
         return { endpoint: attempt.name, data };
       }
 
-      errors.push(`${attempt.name} -> ${response.status}: ${raw.substring(0, 120)}`);
+      errors.push(`${attempt.name} -> ${result.status}: ${result.raw.substring(0, 120)}`);
     } catch (error: any) {
       errors.push(`${attempt.name} -> network: ${error?.message || String(error)}`);
     }
