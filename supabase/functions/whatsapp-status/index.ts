@@ -9,23 +9,30 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { token } = await req.json();
-    const UAZAPI_URL = "https://ipazua.uazapi.com";
+    const { instanceKey } = await req.json();
+    const SERVER_URL = Deno.env.get("WHATSAPI_SERVER_URL");
+    const TOKEN = Deno.env.get("WHATSAPI_TOKEN");
 
-    const statusRes = await fetch(`${UAZAPI_URL}/instance/status`, {
+    if (!SERVER_URL || !TOKEN) throw new Error("Credenciais não configuradas");
+    if (!instanceKey) throw new Error("instanceKey é obrigatório");
+
+    // Get QR code endpoint also returns status
+    const res = await fetch(`${SERVER_URL}/api/instances/${instanceKey}/qrcode`, {
       method: "GET",
-      headers: { token },
+      headers: { "token": TOKEN },
     });
 
-    const data = await statusRes.json();
+    const data = await res.json();
+    const connected = data.status === "connected" || data.data?.status === "connected";
+    const qrCode = data.qrcode || data.qr || data.data?.qrcode || data.data?.qr || null;
 
     return new Response(
       JSON.stringify({
-        connected: data?.status === "connected",
-        status: data?.status || "disconnected",
-        qrCode: data?.qrcode || null,
-        phoneNumber: data?.phone || null,
-        profileName: data?.name || null,
+        connected,
+        status: connected ? "connected" : qrCode ? "connecting" : "disconnected",
+        qrCode: connected ? null : qrCode,
+        phoneNumber: data.phone || data.data?.phone || null,
+        profileName: data.name || data.data?.name || null,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );

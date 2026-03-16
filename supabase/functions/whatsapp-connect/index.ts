@@ -9,75 +9,86 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { userName, webhookUrl, token: existingToken, instanceId: existingInstanceId } = await req.json();
-    const API_KEY = "a2df6c76-6338-4089-819e-ff05d4aabc00";
-    const SUPABASE_FUNCTIONS_URL = "https://xukeukdwhelyttifzveb.supabase.co/functions/v1";
-    const UAZAPI_URL = "https://ipazua.uazapi.com";
+    const { instanceName, instanceKey } = await req.json();
+    const SERVER_URL = Deno.env.get("WHATSAPI_SERVER_URL");
+    const TOKEN = Deno.env.get("WHATSAPI_TOKEN");
 
-    let token = existingToken;
-    let instanceId = existingInstanceId;
+    if (!SERVER_URL || !TOKEN) {
+      throw new Error("WHATSAPI_SERVER_URL ou WHATSAPI_TOKEN não configurados");
+    }
 
-    // Se não tem token salvo, criar nova instância
-    if (!token) {
-      const createRes = await fetch(`${SUPABASE_FUNCTIONS_URL}/create-instance-external`, {
+    let instance_key = instanceKey;
+
+    // If no instance key, create a new instance
+    if (!instance_key) {
+      const createRes = await fetch(`${SERVER_URL}/api/instances/create`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", "token": TOKEN },
         body: JSON.stringify({
-          api_key: API_KEY,
-          name: userName || "Minha Instância",
-          webhookUrl: webhookUrl || undefined,
-          webhookName: webhookUrl ? "webhook-principal" : undefined,
-          events: ["messages"],
+          instance_key: instanceName?.toLowerCase().replace(/\s+/g, "-").replace(/[^a-z0-9-]/g, "") || undefined,
         }),
       });
 
       const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(createData.error || "Erro ao criar instância");
+      if (!createRes.ok) throw new Error(createData.error?.message || createData.message || "Erro ao criar instância");
 
-      token = createData.token;
-      instanceId = createData.instanceId;
+      instance_key = createData.instance_key || createData.key || createData.data?.instance_key;
+      if (!instance_key) throw new Error("Chave da instância não retornada");
     }
 
-    // Conectar para gerar QR Code
-    const connectRes = await fetch(`${UAZAPI_URL}/instance/connect`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", token },
-      body: JSON.stringify({}),
+    // Get QR code
+    const qrRes = await fetch(`${SERVER_URL}/api/instances/${instance_key}/qrcode`, {
+      method: "GET",
+      headers: { "token": TOKEN },
     });
 
-    const connectData = await connectRes.json();
+    let qrCode = null;
+    let status = "waiting_qr";
 
-    // Polling: tenta até 5x buscar o QR Code
-    let qrCode = connectData?.qrcode || null;
-    if (!qrCode) {
-      for (let i = 0; i < 5; i++) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const statusRes = await fetch(`${UAZAPI_URL}/instance/status`, {
+    if (qrRes.ok) {
+      const qrData = await qrRes.json();
+      qrCode = qrData.qrcode || qrData.qr || qrData.data?.qrcode || qrData.data?.qr || null;
+
+      // If qrcode is a full data URI, extract the base64 part
+      if (qrCode && qrCode.startsWith("data:image")) {
+        // Keep as-is for display
+      }
+
+      // Check if already connected
+      if (qrData.status === "connected" || qrData.data?.status === "connected") {
+        status = "connected";
+        qrCode = null;
+      } else if (qrCode) {
+        status = "qr_ready";
+      }
+    }
+
+    // If no QR yet, try polling a few times
+    if (!qrCode && status !== "connected") {
+      for (let i = 0; i < 3; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const retryRes = await fetch(`${SERVER_URL}/api/instances/${instance_key}/qrcode`, {
           method: "GET",
-          headers: { token },
+          headers: { "token": TOKEN },
         });
-        const statusData = await statusRes.json();
-        const inst = statusData?.instance || statusData;
-        qrCode = inst?.qrcode || statusData?.qrcode || null;
-
-        if (statusData?.status === "connected" || inst?.status === "connected") {
-          return new Response(
-            JSON.stringify({ success: true, instanceId, token, qrCode: null, status: "connected" }),
-            { headers: { ...corsHeaders, "Content-Type": "application/json" } }
-          );
+        if (retryRes.ok) {
+          const retryData = await retryRes.json();
+          qrCode = retryData.qrcode || retryData.qr || retryData.data?.qrcode || retryData.data?.qr || null;
+          if (retryData.status === "connected" || retryData.data?.status === "connected") {
+            status = "connected";
+            qrCode = null;
+            break;
+          }
+          if (qrCode) {
+            status = "qr_ready";
+            break;
+          }
         }
-        if (qrCode) break;
       }
     }
 
     return new Response(
-      JSON.stringify({
-        success: true,
-        instanceId,
-        token,
-        qrCode,
-        status: qrCode ? "connecting" : "waiting_qr",
-      }),
+      JSON.stringify({ success: true, instanceKey: instance_key, qrCode, status }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
