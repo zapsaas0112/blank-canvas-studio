@@ -69,9 +69,9 @@ export default function Connections() {
     if (intervalRef.current) clearInterval(intervalRef.current);
     setPolling(inst.id);
     intervalRef.current = setInterval(async () => {
-      if (!inst.token) return;
+      if (!inst.instance_id_external) return;
       try {
-        const status = await whatsappService.getInstanceStatus(inst.token);
+        const status = await whatsappService.getInstanceStatus(inst.instance_id_external);
         if (status.connected) {
           await updateInstance(inst.id, {
             status: 'connected', is_active: true,
