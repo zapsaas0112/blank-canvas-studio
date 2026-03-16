@@ -5,7 +5,7 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
-import { Wifi, WifiOff, QrCode, Trash2, Loader2, Send, RefreshCw, Unplug, Smartphone } from "lucide-react";
+import { Loader2, Wifi, WifiOff, Trash2, RefreshCw, Send, Smartphone, QrCode } from "lucide-react";
 import { toast } from "sonner";
 
 type Status = "idle" | "loading" | "waiting_qr" | "qr" | "connected" | "disconnected" | "error";
@@ -28,7 +28,7 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
   const [sending, setSending] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const WEBHOOK_URL = `https://${import.meta.env.VITE_SUPABASE_PROJECT_ID}.supabase.co/functions/v1/whatsapp-webhook`;
+  const webhookUrl = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/whatsapp-webhook`;
 
   useEffect(() => {
     const saved = localStorage.getItem(STORAGE_KEY);
@@ -43,7 +43,7 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
             });
             if (data?.connected) {
               setStatus("connected");
-              setConnection(prev => ({
+              setConnection((prev) => ({
                 ...prev!,
                 profileName: data.profileName,
                 phoneNumber: data.phoneNumber,
@@ -83,7 +83,7 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
       const { data, error } = await supabase.functions.invoke("whatsapp-connect", {
         body: {
           userName,
-          webhookUrl: WEBHOOK_URL,
+          webhookUrl,
           token: savedData?.token || undefined,
           instanceId: savedData?.instanceId || undefined,
         },
@@ -103,10 +103,10 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
         setStatus("waiting_qr");
         startPolling(data.token);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erro ao conectar:", err);
+      toast.error(err?.message || "Erro ao conectar");
       setStatus("error");
-      toast.error("Erro ao conectar WhatsApp");
     }
   };
 
@@ -120,7 +120,7 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
 
         if (data?.connected) {
           setStatus("connected");
-          setConnection(prev => {
+          setConnection((prev) => {
             const updated = {
               ...prev!,
               profileName: data.profileName,
@@ -130,7 +130,7 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
             return updated;
           });
           stopPolling();
-          toast.success("WhatsApp conectado com sucesso!");
+          toast.success("WhatsApp conectado!");
         } else if (data?.qrCode) {
           setQrCode(data.qrCode);
           setStatus("qr");
@@ -156,18 +156,17 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
       });
       if (data?.connected) {
         setStatus("connected");
-        setConnection(prev => ({
+        setConnection((prev) => ({
           ...prev!,
           profileName: data.profileName,
           phoneNumber: data.phoneNumber,
         }));
-        toast.success("WhatsApp está conectado");
+        toast.success("Conectado");
       } else {
         setStatus("disconnected");
-        toast.info("WhatsApp está desconectado");
+        toast.info("Desconectado");
       }
-    } catch (err) {
-      console.error("Erro ao verificar status:", err);
+    } catch {
       toast.error("Erro ao verificar status");
     }
   };
@@ -181,9 +180,8 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
       setStatus("disconnected");
       setQrCode(null);
       stopPolling();
-      toast.success("WhatsApp desconectado");
-    } catch (err) {
-      console.error("Erro ao desconectar:", err);
+      toast.success("Desconectado");
+    } catch {
       toast.error("Erro ao desconectar");
     }
   };
@@ -199,10 +197,9 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
       clearConnection();
       setQrCode(null);
       stopPolling();
-      toast.success("Instância deletada permanentemente");
-    } catch (err) {
-      console.error("Erro ao deletar:", err);
-      toast.error("Erro ao deletar instância");
+      toast.success("Instância deletada");
+    } catch {
+      toast.error("Erro ao deletar");
     }
   };
 
@@ -218,73 +215,59 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
         },
       });
       if (error) throw error;
-      toast.success("Mensagem enviada com sucesso!");
-    } catch (err) {
-      console.error("Erro ao enviar:", err);
+      toast.success("Mensagem enviada!");
+    } catch {
       toast.error("Erro ao enviar mensagem");
     } finally {
       setSending(false);
     }
   };
 
-  const statusConfig = {
-    idle: { color: "bg-muted-foreground", label: "Não conectado" },
-    loading: { color: "bg-yellow-500 animate-pulse", label: "Conectando..." },
-    waiting_qr: { color: "bg-yellow-500 animate-pulse", label: "Gerando QR Code..." },
-    qr: { color: "bg-yellow-500 animate-pulse", label: "Aguardando leitura do QR" },
-    connected: { color: "bg-primary", label: "Conectado" },
-    disconnected: { color: "bg-destructive", label: "Desconectado" },
-    error: { color: "bg-destructive", label: "Erro" },
+  const statusConfig: Record<Status, { color: string; label: string; icon: React.ReactNode }> = {
+    idle: { color: "bg-muted text-muted-foreground", label: "Não conectado", icon: <WifiOff className="w-3 h-3" /> },
+    loading: { color: "bg-yellow-500/20 text-yellow-600", label: "Conectando...", icon: <Loader2 className="w-3 h-3 animate-spin" /> },
+    waiting_qr: { color: "bg-yellow-500/20 text-yellow-600", label: "Gerando QR...", icon: <Loader2 className="w-3 h-3 animate-spin" /> },
+    qr: { color: "bg-yellow-500/20 text-yellow-600", label: "Aguardando QR", icon: <QrCode className="w-3 h-3" /> },
+    connected: { color: "bg-primary/20 text-primary", label: "Conectado", icon: <Wifi className="w-3 h-3" /> },
+    disconnected: { color: "bg-destructive/20 text-destructive", label: "Desconectado", icon: <WifiOff className="w-3 h-3" /> },
+    error: { color: "bg-destructive/20 text-destructive", label: "Erro", icon: <WifiOff className="w-3 h-3" /> },
   };
+
+  const sc = statusConfig[status];
 
   return (
     <div className="space-y-6">
-      {/* Header com status */}
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
-            <Smartphone className="w-5 h-5 text-primary" />
-          </div>
-          <div>
-            <h2 className="text-lg font-semibold text-foreground">WhatsApp</h2>
-            <div className="flex items-center gap-2 mt-0.5">
-              <div className={`w-2 h-2 rounded-full ${statusConfig[status].color}`} />
-              <span className="text-xs text-muted-foreground">{statusConfig[status].label}</span>
-            </div>
-          </div>
+        <div>
+          <h2 className="text-xl font-bold text-foreground">WhatsApp</h2>
+          <p className="text-sm text-muted-foreground">Gerencie sua conexão</p>
         </div>
+        <Badge variant="outline" className={`${sc.color} gap-1`}>
+          {sc.icon} {sc.label}
+        </Badge>
       </div>
 
       {/* IDLE */}
       {status === "idle" && (
-        <Card className="border-dashed border-border bg-muted/20">
-          <CardContent className="flex flex-col items-center justify-center py-10">
-            <QrCode className="w-16 h-16 text-muted-foreground mb-4" />
-            <p className="text-sm text-muted-foreground mb-4">Conecte seu WhatsApp escaneando o QR Code</p>
+        <Card className="border-border">
+          <CardContent className="p-8 text-center space-y-4">
+            <Smartphone className="w-12 h-12 text-muted-foreground mx-auto" />
+            <p className="text-sm text-muted-foreground">Nenhuma instância conectada</p>
             <Button onClick={connect} className="gap-2">
-              <Wifi className="w-4 h-4" /> Conectar WhatsApp
+              <Smartphone className="w-4 h-4" /> Conectar WhatsApp
             </Button>
           </CardContent>
         </Card>
       )}
 
-      {/* LOADING */}
-      {status === "loading" && (
+      {/* LOADING / WAITING QR */}
+      {(status === "loading" || status === "waiting_qr") && (
         <Card className="border-border">
-          <CardContent className="flex flex-col items-center justify-center py-10">
-            <Loader2 className="w-10 h-10 text-primary animate-spin mb-4" />
-            <p className="text-sm text-muted-foreground">Criando instância e gerando QR Code...</p>
-          </CardContent>
-        </Card>
-      )}
-
-      {/* WAITING QR */}
-      {status === "waiting_qr" && (
-        <Card className="border-border">
-          <CardContent className="flex flex-col items-center justify-center py-10">
-            <Loader2 className="w-10 h-10 text-primary animate-spin mb-4" />
-            <p className="text-sm text-muted-foreground">Gerando QR Code...</p>
-            <p className="text-xs text-muted-foreground mt-1">Isso pode levar alguns segundos</p>
+          <CardContent className="p-8 text-center space-y-3">
+            <Loader2 className="w-10 h-10 animate-spin text-primary mx-auto" />
+            <p className="text-sm text-muted-foreground">
+              {status === "loading" ? "Criando instância e gerando QR Code..." : "Gerando QR Code..."}
+            </p>
           </CardContent>
         </Card>
       )}
@@ -292,14 +275,14 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
       {/* QR CODE */}
       {status === "qr" && qrCode && (
         <Card className="border-border">
-          <CardContent className="flex flex-col items-center justify-center py-8">
-            <p className="text-sm font-medium text-foreground mb-4">Escaneie o QR Code com seu WhatsApp:</p>
+          <CardContent className="p-6 text-center space-y-4">
+            <p className="text-sm font-medium text-foreground">Escaneie o QR Code com seu WhatsApp:</p>
             <img
-              src={`data:image/png;base64,${qrCode}`}
+              src={qrCode.startsWith("data:") ? qrCode : `data:image/png;base64,${qrCode}`}
               alt="QR Code WhatsApp"
-              className="w-64 h-64 rounded-xl border-2 border-border shadow-lg"
+              className="w-56 h-56 mx-auto rounded-xl border-2 border-border shadow-lg"
             />
-            <p className="text-xs text-muted-foreground mt-4 animate-pulse">⏳ Aguardando conexão...</p>
+            <p className="text-xs text-muted-foreground animate-pulse">⏳ Aguardando conexão...</p>
           </CardContent>
         </Card>
       )}
@@ -308,11 +291,11 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
       {status === "connected" && (
         <div className="space-y-4">
           <Card className="border-primary/30 bg-primary/5">
-            <CardContent className="flex flex-col items-center py-6">
-              <Wifi className="w-8 h-8 text-primary mb-2" />
-              <p className="text-lg font-semibold text-foreground">WhatsApp Conectado!</p>
+            <CardContent className="p-5 text-center space-y-2">
+              <div className="text-3xl">✅</div>
+              <p className="text-lg font-semibold text-primary">WhatsApp Conectado!</p>
               {connection?.profileName && (
-                <p className="text-sm text-muted-foreground mt-1">👤 {connection.profileName}</p>
+                <p className="text-sm text-muted-foreground">👤 {connection.profileName}</p>
               )}
               {connection?.phoneNumber && (
                 <p className="text-sm text-muted-foreground">📞 {connection.phoneNumber}</p>
@@ -320,47 +303,36 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
             </CardContent>
           </Card>
 
-          {/* Enviar mensagem de teste */}
           <Card className="border-border">
-            <CardContent className="py-4 space-y-3">
-              <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-                <Send className="w-4 h-4" /> Enviar mensagem de teste
-              </h3>
+            <CardContent className="p-4 space-y-3">
+              <h3 className="font-semibold text-sm text-foreground">📤 Enviar mensagem de teste</h3>
               <Input
                 placeholder="Número (ex: 5511999999999)"
                 value={testPhone}
                 onChange={(e) => setTestPhone(e.target.value)}
-                className="bg-muted/50 border-border"
               />
               <Textarea
                 placeholder="Mensagem..."
                 value={testMessage}
                 onChange={(e) => setTestMessage(e.target.value)}
-                className="bg-muted/50 border-border resize-none"
                 rows={2}
               />
-              <Button
-                onClick={sendTestMessage}
-                disabled={sending || !testPhone}
-                className="w-full gap-2"
-                variant="default"
-              >
+              <Button onClick={sendTestMessage} disabled={sending || !testPhone} className="w-full gap-2">
                 {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 {sending ? "Enviando..." : "Enviar Mensagem"}
               </Button>
             </CardContent>
           </Card>
 
-          {/* Ações */}
           <div className="flex gap-2">
             <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={checkStatus}>
               <RefreshCw className="w-3.5 h-3.5" /> Verificar Status
             </Button>
-            <Button variant="outline" size="sm" className="flex-1 gap-1 text-orange-500 border-orange-500/30 hover:bg-orange-500/10" onClick={disconnect}>
-              <Unplug className="w-3.5 h-3.5" /> Desconectar
+            <Button variant="outline" size="sm" className="flex-1 gap-1 text-orange-600 border-orange-300 hover:bg-orange-50" onClick={disconnect}>
+              <WifiOff className="w-3.5 h-3.5" /> Desconectar
             </Button>
           </div>
-          <Button variant="outline" size="sm" className="w-full gap-1 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={deleteInstance}>
+          <Button variant="outline" size="sm" className="w-full gap-1 text-destructive border-destructive/30 hover:bg-destructive/5" onClick={deleteInstance}>
             <Trash2 className="w-3.5 h-3.5" /> Deletar Instância (irreversível)
           </Button>
         </div>
@@ -368,20 +340,19 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
 
       {/* DISCONNECTED */}
       {status === "disconnected" && (
-        <div className="space-y-4">
-          <Card className="border-orange-500/30 bg-orange-500/5">
-            <CardContent className="flex flex-col items-center py-6">
-              <WifiOff className="w-8 h-8 text-orange-500 mb-2" />
-              <p className="text-sm font-medium text-foreground">WhatsApp desconectado</p>
-              <p className="text-xs text-muted-foreground mt-1">A instância ainda existe. Você pode reconectar ou deletar.</p>
+        <div className="space-y-3">
+          <Card className="border-orange-300 bg-orange-50 dark:bg-orange-950/20">
+            <CardContent className="p-5 text-center space-y-1">
+              <p className="text-orange-700 dark:text-orange-400 font-medium">WhatsApp desconectado</p>
+              <p className="text-xs text-orange-500">A instância ainda existe. Você pode reconectar ou deletar.</p>
             </CardContent>
           </Card>
           <div className="flex gap-2">
-            <Button className="flex-1 gap-2" onClick={connect}>
-              <RefreshCw className="w-4 h-4" /> Reconectar
+            <Button className="flex-1 gap-1" onClick={connect}>
+              <RefreshCw className="w-3.5 h-3.5" /> Reconectar
             </Button>
-            <Button variant="outline" className="flex-1 gap-2 text-destructive border-destructive/30 hover:bg-destructive/10" onClick={deleteInstance}>
-              <Trash2 className="w-4 h-4" /> Deletar
+            <Button variant="outline" className="flex-1 gap-1 text-destructive border-destructive/30" onClick={deleteInstance}>
+              <Trash2 className="w-3.5 h-3.5" /> Deletar
             </Button>
           </div>
         </div>
@@ -389,17 +360,14 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
 
       {/* ERROR */}
       {status === "error" && (
-        <div className="space-y-4">
+        <div className="space-y-3">
           <Card className="border-destructive/30 bg-destructive/5">
-            <CardContent className="flex flex-col items-center py-6">
-              <WifiOff className="w-8 h-8 text-destructive mb-2" />
-              <p className="text-sm font-medium text-foreground">Erro ao conectar</p>
-              <p className="text-xs text-muted-foreground mt-1">Verifique sua conexão e tente novamente</p>
+            <CardContent className="p-5 text-center space-y-1">
+              <p className="text-destructive font-medium">❌ Erro ao conectar</p>
+              <p className="text-xs text-muted-foreground">Verifique sua conexão e tente novamente</p>
             </CardContent>
           </Card>
-          <Button onClick={connect} className="w-full gap-2">
-            <RefreshCw className="w-4 h-4" /> Tentar novamente
-          </Button>
+          <Button onClick={connect} className="w-full">Tentar novamente</Button>
         </div>
       )}
     </div>
