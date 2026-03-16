@@ -32,8 +32,7 @@ export default function Connections() {
     if (!instanceName.trim() || !workspace) return;
     setCreating(true);
     try {
-      const webhookUrl = `https://${import.meta.env.VITE_SUPABASE_PROJECT_ID}.supabase.co/functions/v1/whatsapp-webhook`;
-      const instance = await whatsappService.createInstance(workspace.id, instanceName.trim(), webhookUrl);
+      const instance = await whatsappService.createInstance(workspace.id, instanceName.trim());
       setDialogOpen(false);
       setInstanceName('');
       await refetch();
@@ -51,10 +50,10 @@ export default function Connections() {
   }
 
   async function handleConnect(inst: Instance) {
-    if (!inst.token) { toast.error('Token não encontrado'); return; }
+    if (!inst.instance_id_external) { toast.error('Chave da instância não encontrada'); return; }
     setPolling(inst.id);
     try {
-      const result = await whatsappService.connectInstance(inst.token);
+      const result = await whatsappService.connectInstance(inst.instance_id_external);
       if (result.qrCode) {
         setActiveQr({ instanceId: inst.id, qrCode: result.qrCode });
         await updateInstance(inst.id, { qr_code: result.qrCode });
@@ -70,9 +69,9 @@ export default function Connections() {
     if (intervalRef.current) clearInterval(intervalRef.current);
     setPolling(inst.id);
     intervalRef.current = setInterval(async () => {
-      if (!inst.token) return;
+      if (!inst.instance_id_external) return;
       try {
-        const status = await whatsappService.getInstanceStatus(inst.token);
+        const status = await whatsappService.getInstanceStatus(inst.instance_id_external);
         if (status.connected) {
           await updateInstance(inst.id, {
             status: 'connected', is_active: true,
@@ -91,9 +90,9 @@ export default function Connections() {
   }
 
   async function handleDisconnect(inst: Instance) {
-    if (!inst.token) return;
+    if (!inst.instance_id_external) return;
     try {
-      await whatsappService.disconnectInstance(inst.token);
+      await whatsappService.disconnectInstance(inst.instance_id_external);
       await updateInstance(inst.id, { status: 'disconnected', is_active: false });
       toast.success('Desconectado');
       await refetch();
@@ -110,9 +109,9 @@ export default function Connections() {
   }
 
   async function handleCheckStatus(inst: Instance) {
-    if (!inst.token) return;
+    if (!inst.instance_id_external) return;
     try {
-      const status = await whatsappService.getInstanceStatus(inst.token);
+      const status = await whatsappService.getInstanceStatus(inst.instance_id_external);
       await updateInstance(inst.id, {
         status: status.connected ? 'connected' : 'disconnected',
         is_active: status.connected,
@@ -153,7 +152,7 @@ export default function Connections() {
 
               {activeQr?.instanceId === inst.id && activeQr.qrCode && (
                 <div className="text-center py-2">
-                  <img src={`data:image/png;base64,${activeQr.qrCode}`} alt="QR Code" className="w-48 h-48 mx-auto rounded-xl border-2 border-border" />
+                  <img src={activeQr.qrCode.startsWith('data:') ? activeQr.qrCode : `data:image/png;base64,${activeQr.qrCode}`} alt="QR Code" className="w-48 h-48 mx-auto rounded-xl border-2 border-border" />
                   <p className="text-xs text-muted-foreground mt-2 animate-pulse">Escaneie com WhatsApp</p>
                 </div>
               )}

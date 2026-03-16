@@ -9,17 +9,20 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const { token, phone, message } = await req.json();
-    const UAZAPI_URL = "https://ipazua.uazapi.com";
+    const { instanceKey, phone, message } = await req.json();
+    const SERVER_URL = Deno.env.get("WHATSAPI_SERVER_URL");
+    const TOKEN = Deno.env.get("WHATSAPI_TOKEN");
 
-    if (!token || !phone || !message) {
-      throw new Error("token, phone e message são obrigatórios");
-    }
+    if (!SERVER_URL || !TOKEN) throw new Error("Credenciais não configuradas");
+    if (!instanceKey || !phone || !message) throw new Error("instanceKey, phone e message são obrigatórios");
 
-    const res = await fetch(`${UAZAPI_URL}/message/sendText`, {
+    const res = await fetch(`${SERVER_URL}/api/instances/${instanceKey}/send-message`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", token },
-      body: JSON.stringify({ phone, message }),
+      headers: { "Content-Type": "application/json", "token": TOKEN },
+      body: JSON.stringify({
+        to: phone.replace(/\D/g, ""),
+        message,
+      }),
     });
 
     const data = await res.json();
