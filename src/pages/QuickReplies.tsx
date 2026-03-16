@@ -1,41 +1,40 @@
-import { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
+import { useState } from 'react';
+import { useQuickReplies } from '@/hooks/useQuickReplies';
 import AppLayout from '@/components/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Plus, Pencil, Trash2, Zap } from 'lucide-react';
+import { Plus, Pencil, Trash2, Zap, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
-
-interface QuickReply { id: string; title: string; content: string; shortcut: string | null; created_by: string | null; }
+import type { QuickReply } from '@/types/database';
 
 export default function QuickReplies() {
-  const { user } = useAuth();
-  const [replies, setReplies] = useState<QuickReply[]>([]);
+  const { replies, loading, create, update, remove } = useQuickReplies();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [shortcut, setShortcut] = useState('');
 
-  useEffect(() => { load(); }, []);
-  async function load() { const { data } = await supabase.from('quick_replies').select('*').order('created_at', { ascending: false }); if (data) setReplies(data); }
-
   function openNew() { setEditId(null); setTitle(''); setContent(''); setShortcut(''); setDialogOpen(true); }
   function openEdit(r: QuickReply) { setEditId(r.id); setTitle(r.title); setContent(r.content); setShortcut(r.shortcut || ''); setDialogOpen(true); }
 
   async function handleSave() {
     if (!title.trim() || !content.trim()) { toast.error('Preencha título e conteúdo'); return; }
-    const payload = { title: title.trim(), content: content.trim(), shortcut: shortcut.trim() || null, created_by: user?.id || null };
-    if (editId) { await supabase.from('quick_replies').update(payload).eq('id', editId); toast.success('Atualizado'); }
-    else { await supabase.from('quick_replies').insert(payload); toast.success('Criado'); }
-    setDialogOpen(false); load();
+    try {
+      if (editId) { await update(editId, title.trim(), content.trim(), shortcut.trim()); toast.success('Atualizado'); }
+      else { await create(title.trim(), content.trim(), shortcut.trim()); toast.success('Criado'); }
+      setDialogOpen(false);
+    } catch { toast.error('Erro ao salvar'); }
   }
 
-  async function handleDelete(id: string) { await supabase.from('quick_replies').delete().eq('id', id); toast.success('Removido'); load(); }
+  async function handleDelete(id: string) {
+    try { await remove(id); toast.success('Removido'); } catch { toast.error('Erro ao remover'); }
+  }
+
+  if (loading) return <AppLayout><div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div></AppLayout>;
 
   return (
     <AppLayout>

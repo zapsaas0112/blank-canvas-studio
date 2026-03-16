@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import AppLayout from '@/components/AppLayout';
 import { MessageSquare, CheckCircle2, Users, Send, TrendingUp } from 'lucide-react';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
@@ -22,22 +23,32 @@ function StatsCard({ icon: Icon, label, value, color }: { icon: React.ElementTyp
 }
 
 export default function Dashboard() {
-  const [stats, setStats] = useState({ open: 0, resolved: 0, agents: 0, messages: 0 });
+  const { workspace } = useAuth();
+  const [stats, setStats] = useState({ open: 0, resolved: 0, agents: 0, messages: 0, contacts: 0, broadcasts: 0 });
   const [lineData, setLineData] = useState<any[]>([]);
   const [pieData, setPieData] = useState<any[]>([]);
 
-  useEffect(() => { fetchStats(); }, []);
+  useEffect(() => { if (workspace) fetchStats(); }, [workspace?.id]);
 
   async function fetchStats() {
-    const [convRes, msgRes, profileRes] = await Promise.all([
-      supabase.from('conversations').select('status, created_at'),
-      supabase.from('messages').select('id', { count: 'exact', head: true }),
-      supabase.from('profiles').select('id', { count: 'exact', head: true }),
+    if (!workspace) return;
+    const [convRes, msgRes, agentRes, contactRes, broadcastRes] = await Promise.all([
+      supabase.from('conversations').select('status, created_at').eq('workspace_id', workspace.id),
+      supabase.from('messages').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
+      supabase.from('agents').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
+      supabase.from('customers').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
+      supabase.from('broadcasts').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
     ]);
     const convs = convRes.data || [];
     const open = convs.filter(c => c.status === 'open' || c.status === 'unassigned').length;
     const closed = convs.filter(c => c.status === 'closed').length;
-    setStats({ open, resolved: closed, agents: profileRes.count || 0, messages: msgRes.count || 0 });
+    setStats({
+      open, resolved: closed,
+      agents: agentRes.count || 0,
+      messages: msgRes.count || 0,
+      contacts: contactRes.count || 0,
+      broadcasts: broadcastRes.count || 0,
+    });
 
     const statusCounts = [
       { name: 'Aberto', value: convs.filter(c => c.status === 'open').length },

@@ -1,36 +1,39 @@
-import { useEffect, useState } from 'react';
-import { supabase } from '@/integrations/supabase/client';
+import { useState } from 'react';
+import { useTags } from '@/hooks/useTags';
 import AppLayout from '@/components/AppLayout';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Plus, Pencil, Trash2, Hash } from 'lucide-react';
+import { Plus, Pencil, Trash2, Hash, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const PRESET_COLORS = ['#25D366', '#3B82F6', '#F59E0B', '#EF4444', '#8B5CF6', '#EC4899', '#06B6D4', '#10B981'];
 
 export default function Tags() {
-  const [tags, setTags] = useState<{ id: string; name: string; color: string }[]>([]);
+  const { tags, loading, create, update, remove } = useTags();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [color, setColor] = useState(PRESET_COLORS[0]);
-
-  useEffect(() => { load(); }, []);
-  async function load() { const { data } = await supabase.from('tags').select('*').order('created_at'); if (data) setTags(data); }
 
   function openNew() { setEditId(null); setName(''); setColor(PRESET_COLORS[0]); setDialogOpen(true); }
   function openEdit(t: any) { setEditId(t.id); setName(t.name); setColor(t.color); setDialogOpen(true); }
 
   async function handleSave() {
     if (!name.trim()) { toast.error('Digite um nome'); return; }
-    if (editId) { await supabase.from('tags').update({ name: name.trim(), color }).eq('id', editId); toast.success('Atualizada'); }
-    else { await supabase.from('tags').insert({ name: name.trim(), color }); toast.success('Criada'); }
-    setDialogOpen(false); load();
+    try {
+      if (editId) { await update(editId, name.trim(), color); toast.success('Atualizada'); }
+      else { await create(name.trim(), color); toast.success('Criada'); }
+      setDialogOpen(false);
+    } catch { toast.error('Erro ao salvar'); }
   }
 
-  async function handleDelete(id: string) { await supabase.from('tags').delete().eq('id', id); toast.success('Removida'); load(); }
+  async function handleDelete(id: string) {
+    try { await remove(id); toast.success('Removida'); } catch { toast.error('Erro ao remover'); }
+  }
+
+  if (loading) return <AppLayout><div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div></AppLayout>;
 
   return (
     <AppLayout>
