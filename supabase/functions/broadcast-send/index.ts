@@ -6,11 +6,18 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const OPERATIONS_URL = "https://ipazua.uazapi.com";
 const DELAY_MS = 1500;
-const UAZAPI_URL = "https://ipazua.uazapi.com";
 
 function sleep(ms: number) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function normalizePhone(input: string): string {
+  let digits = input.replace(/\D/g, "");
+  if (digits.startsWith("0")) digits = digits.substring(1);
+  if (!digits.startsWith("55")) digits = "55" + digits;
+  return digits;
 }
 
 serve(async (req) => {
@@ -22,16 +29,30 @@ serve(async (req) => {
     if (!token) throw new Error("token do WhatsApp é obrigatório");
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const db = createClient(supabaseUrl, supabaseServiceRoleKey);
+    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const db = createClient(supabaseUrl, supabaseKey);
 
+    // ── Verify instance is connected ──
+    const statusRes = await fetch(`${OPERATIONS_URL}/instance/status`, {
+      method: "GET",
+      headers: { token },
+    });
+    const statusData = await statusRes.json().catch(() => ({}));
+    const inst = statusData?.instance || statusData || {};
+    const so = statusData?.status || {};
+    const isConnected = so?.connected === true || inst?.status === "open" || inst?.status === "connected";
+
+    if (!isConnected) {
+      await db.from("broadcasts").update({ status: "failed" }).eq("id", broadcastId);
+      throw new Error("Instância não está conectada. Conecte antes de disparar.");
+    }
+
+    // ── Get broadcast ──
     const { data: broadcast, error: bErr } = await db
-      .from("broadcasts")
-      .select("*")
-      .eq("id", broadcastId)
-      .single();
+      .from("broadcasts").select("*").eq("id", broadcastId).single();
     if (bErr || !broadcast) throw new Error("Broadcast não encontrado");
 
+    // ── Get recipients ──
     const { data: recipients, error: rErr } = await db
       .from("broadcast_recipients")
       .select("id, contact_id, status, customers:contact_id(name, phone)")
@@ -55,20 +76,38 @@ serve(async (req) => {
         continue;
       }
 
-      const phone = String(contact.phone).replace(/\D/g, "");
+      const phone = normalizePhone(contact.phone);
+      if (phone.length < 12) {
+        await db.from("broadcast_recipients").update({
+          status: "failed", failed_at: new Date().toISOString(), error_message: `Número inválido: ${phone}`,
+        }).eq("id", recipient.id);
+        totalFailed++;
+        continue;
+      }
+
       const personalizedMessage = String(broadcast.message || "").replace(/\{\{name\}\}/gi, contact.name || "");
 
       try {
-        const res = await fetch(`${UAZAPI_URL}/message/sendText`, {
+        // Use correct endpoint: /send/text with {number, text}
+        const res = await fetch(`${OPERATIONS_URL}/send/text`, {
           method: "POST",
           headers: { "Content-Type": "application/json", token },
-          body: JSON.stringify({ phone, message: personalizedMessage }),
+          body: JSON.stringify({ number: phone, text: personalizedMessage }),
         });
 
         const raw = await res.text();
-        console.log(`[broadcast-send] ${phone}: ${res.status} ${raw.substring(0, 200)}`);
+        console.log(`[broadcast-send] ${phone}: ${res.status} ${raw.substring(0, 300)}`);
 
-        if (!res.ok) throw new Error(raw.substring(0, 255));
+        let data: any = {};
+        try { data = JSON.parse(raw); } catch {}
+
+        // Validate real success
+        const hasId = !!(data?.messageId || data?.messageid || data?.key);
+        const statusOk = !data?._status || data._status === 200;
+
+        if (!res.ok || !statusOk || (data?.error && !hasId)) {
+          throw new Error(data?.error || data?.message || `HTTP ${res.status}: ${raw.substring(0, 150)}`);
+        }
 
         await db.from("broadcast_recipients").update({
           status: "sent", sent_at: new Date().toISOString(),
@@ -90,9 +129,9 @@ serve(async (req) => {
       await sleep(DELAY_MS);
     }
 
+    const finalStatus = totalSent > 0 ? "done" : totalFailed > 0 ? "failed" : "done";
     await db.from("broadcasts").update({
-      status: totalSent > 0 || totalFailed === 0 ? "done" : "failed",
-      total_sent: totalSent, total_failed: totalFailed,
+      status: finalStatus, total_sent: totalSent, total_failed: totalFailed,
       sent_at: new Date().toISOString(),
     }).eq("id", broadcastId);
 
@@ -105,7 +144,7 @@ serve(async (req) => {
   } catch (error: any) {
     console.error("[broadcast-send] Error:", error?.message);
     return new Response(
-      JSON.stringify({ error: error?.message || "Erro desconhecido" }),
+      JSON.stringify({ success: false, error: error?.message }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
