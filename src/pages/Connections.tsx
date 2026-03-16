@@ -109,9 +109,9 @@ export default function Connections() {
   }
 
   async function handleCheckStatus(inst: Instance) {
-    if (!inst.token) return;
+    if (!inst.instance_id_external) return;
     try {
-      const status = await whatsappService.getInstanceStatus(inst.token);
+      const status = await whatsappService.getInstanceStatus(inst.instance_id_external);
       await updateInstance(inst.id, {
         status: status.connected ? 'connected' : 'disconnected',
         is_active: status.connected,
