@@ -3,7 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
 const DELAY_MS = 1500; // 1.5s between each message
@@ -13,19 +13,15 @@ function sleep(ms: number) {
 }
 
 serve(async (req) => {
-  if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
     const { broadcastId } = await req.json();
     if (!broadcastId) throw new Error("broadcastId é obrigatório");
 
-    const SERVER_URL = (Deno.env.get("WHATSAPI_SERVER_URL") || "").replace(/\/+$/, "");
-    const TOKEN = Deno.env.get("WHATSAPI_TOKEN");
-    if (!SERVER_URL || !TOKEN) throw new Error("Credenciais UAZAPI não configuradas");
-
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const db = createClient(supabaseUrl, supabaseKey);
+    const supabaseServiceRoleKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const db = createClient(supabaseUrl, supabaseServiceRoleKey);
 
     // Get broadcast
     const { data: broadcast, error: bErr } = await db
@@ -47,54 +43,71 @@ serve(async (req) => {
 
     let totalSent = 0;
     let totalFailed = 0;
-    const sendUrl = `${SERVER_URL}/message/send-text`;
 
     for (const recipient of (recipients || [])) {
       const contact = recipient.customers as any;
+
       if (!contact?.phone) {
-        await db.from("broadcast_recipients").update({
-          status: "failed",
-          failed_at: new Date().toISOString(),
-          error_message: "Sem número de telefone",
-        }).eq("id", recipient.id);
+        await db
+          .from("broadcast_recipients")
+          .update({
+            status: "failed",
+            failed_at: new Date().toISOString(),
+            error_message: "Sem número de telefone",
+          })
+          .eq("id", recipient.id);
         totalFailed++;
         continue;
       }
 
-      const phone = contact.phone.replace(/\D/g, "");
-      const personalizedMessage = broadcast.message.replace(/\{\{name\}\}/gi, contact.name || "");
+      const phone = String(contact.phone).replace(/\D/g, "");
+      const personalizedMessage = String(broadcast.message || "").replace(/\{\{name\}\}/gi, contact.name || "");
 
       try {
         console.log(`[broadcast-send] Sending to ${phone}...`);
-        const res = await fetch(sendUrl, {
+
+        const sendRes = await fetch(`${supabaseUrl}/functions/v1/whatsapp-send`, {
           method: "POST",
-          headers: { "Content-Type": "application/json", "token": TOKEN },
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${supabaseServiceRoleKey}`,
+            apikey: supabaseServiceRoleKey,
+          },
           body: JSON.stringify({ phone, message: personalizedMessage }),
         });
 
-        const text = await res.text();
-        console.log(`[broadcast-send] Response for ${phone}: ${res.status} ${text.substring(0, 200)}`);
+        const sendRaw = await sendRes.text();
+        console.log(`[broadcast-send] send result ${phone}: ${sendRes.status} ${sendRaw.substring(0, 200)}`);
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}: ${text.substring(0, 200)}`);
+        if (!sendRes.ok) {
+          throw new Error(sendRaw.substring(0, 255));
+        }
 
-        await db.from("broadcast_recipients").update({
-          status: "sent",
-          sent_at: new Date().toISOString(),
-        }).eq("id", recipient.id);
+        await db
+          .from("broadcast_recipients")
+          .update({
+            status: "sent",
+            sent_at: new Date().toISOString(),
+          })
+          .eq("id", recipient.id);
 
-        // Also update broadcast_contacts
-        await db.from("broadcast_contacts").update({ status: "sent" })
+        await db
+          .from("broadcast_contacts")
+          .update({ status: "sent" })
           .eq("broadcast_id", broadcastId)
           .eq("contact_id", recipient.contact_id);
 
         totalSent++;
-      } catch (err) {
-        console.error(`[broadcast-send] Failed for ${phone}:`, err.message);
-        await db.from("broadcast_recipients").update({
-          status: "failed",
-          failed_at: new Date().toISOString(),
-          error_message: err.message?.substring(0, 255),
-        }).eq("id", recipient.id);
+      } catch (err: any) {
+        console.error(`[broadcast-send] Failed for ${phone}:`, err?.message || err);
+        await db
+          .from("broadcast_recipients")
+          .update({
+            status: "failed",
+            failed_at: new Date().toISOString(),
+            error_message: (err?.message || "Erro ao enviar").substring(0, 255),
+          })
+          .eq("id", recipient.id);
         totalFailed++;
       }
 
@@ -102,13 +115,15 @@ serve(async (req) => {
       await sleep(DELAY_MS);
     }
 
-    // Update broadcast status
-    await db.from("broadcasts").update({
-      status: "done",
-      total_sent: totalSent,
-      total_failed: totalFailed,
-      sent_at: new Date().toISOString(),
-    }).eq("id", broadcastId);
+    await db
+      .from("broadcasts")
+      .update({
+        status: totalSent > 0 || totalFailed === 0 ? "done" : "failed",
+        total_sent: totalSent,
+        total_failed: totalFailed,
+        sent_at: new Date().toISOString(),
+      })
+      .eq("id", broadcastId);
 
     console.log(`[broadcast-send] Done. Sent: ${totalSent}, Failed: ${totalFailed}`);
 
@@ -116,10 +131,10 @@ serve(async (req) => {
       JSON.stringify({ success: true, totalSent, totalFailed }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
-  } catch (error) {
-    console.error("[broadcast-send] Error:", error.message);
+  } catch (error: any) {
+    console.error("[broadcast-send] Error:", error?.message || error);
     return new Response(
-      JSON.stringify({ error: error.message }),
+      JSON.stringify({ error: error?.message || "Erro desconhecido" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
