@@ -32,8 +32,7 @@ export default function Connections() {
     if (!instanceName.trim() || !workspace) return;
     setCreating(true);
     try {
-      const webhookUrl = `https://${import.meta.env.VITE_SUPABASE_PROJECT_ID}.supabase.co/functions/v1/whatsapp-webhook`;
-      const instance = await whatsappService.createInstance(workspace.id, instanceName.trim(), webhookUrl);
+      const instance = await whatsappService.createInstance(workspace.id, instanceName.trim());
       setDialogOpen(false);
       setInstanceName('');
       await refetch();
