@@ -23,10 +23,9 @@ export function useBroadcasts() {
 
   useEffect(() => { fetch(); }, [fetch]);
 
-  async function create(name: string, message: string, contactIds: string[]) {
+  async function create(name: string, message: string, contactIds: string[], delayMin = 1.5, delayMax = 3) {
     if (!workspace) return;
 
-    // Validate WhatsApp is connected
     const conn = await whatsappService.getActiveToken();
     if (!conn) throw new Error("WhatsApp não conectado. Conecte primeiro na página de Conexões.");
 
@@ -47,9 +46,9 @@ export function useBroadcasts() {
       contactIds.map(cid => ({ broadcast_id: bc.id, contact_id: cid, status: 'pending' }))
     );
 
-    // Fire and forget with token
+    // Fire and forget with configurable delay
     supabase.functions.invoke('broadcast-send', {
-      body: { broadcastId: bc.id, token: conn.token },
+      body: { broadcastId: bc.id, token: conn.token, delayMin, delayMax },
     }).then(({ data, error: sendErr }) => {
       if (sendErr) console.error('Broadcast send error:', sendErr);
       else console.log('Broadcast send result:', data);
