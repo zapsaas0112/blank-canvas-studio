@@ -48,8 +48,10 @@ serve(async (req) => {
     const { data: broadcast } = await db.from("broadcasts").select("*").eq("id", broadcastId).single();
     if (!broadcast) throw new Error("Broadcast não encontrado");
 
+    const workspaceId = broadcast.workspace_id;
+
     const { data: recipients } = await db.from("broadcast_recipients")
-      .select("id, contact_id, status, customers:contact_id(name, phone)")
+      .select("id, contact_id, status, customers:contact_id(id, name, phone)")
       .eq("broadcast_id", broadcastId).eq("status", "pending");
 
     console.log(`[broadcast-send] Processing ${recipients?.length || 0} recipients, delay ${delayMin}-${delayMax}s`);
@@ -80,6 +82,34 @@ serve(async (req) => {
 
       const personalizedMsg = String(broadcast.message || "").replace(/\{\{name\}\}/gi, contact.name || "");
 
+      // ── Find or create conversation for this contact ──
+      let conversationId: string | null = null;
+      try {
+        let { data: existingConv } = await db.from("conversations")
+          .select("id")
+          .eq("customer_id", contact.id)
+          .eq("workspace_id", workspaceId)
+          .neq("status", "closed")
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (existingConv) {
+          conversationId = existingConv.id;
+        } else {
+          const { data: newConv } = await db.from("conversations").insert({
+            customer_id: contact.id,
+            workspace_id: workspaceId,
+            status: "unassigned",
+            last_message_at: new Date().toISOString(),
+          }).select("id").single();
+          conversationId = newConv?.id || null;
+        }
+      } catch (convErr: any) {
+        console.error(`[broadcast-send] Conv error for ${phone}:`, convErr?.message);
+      }
+
+      // ── Send via WhatsApp API ──
       try {
         const res = await fetch(`${OPERATIONS_URL}/send/text`, {
           method: "POST",
@@ -100,11 +130,41 @@ serve(async (req) => {
           throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
         }
 
+        // ── Persist outbound message to messages table ──
+        if (conversationId) {
+          await db.from("messages").insert({
+            conversation_id: conversationId,
+            workspace_id: workspaceId,
+            sender_type: "system",
+            content: personalizedMsg,
+            message_type: "text",
+            status: "sent",
+          });
+
+          // Update conversation timestamp
+          await db.from("conversations").update({
+            last_message_at: new Date().toISOString(),
+          }).eq("id", conversationId);
+        }
+
         await db.from("broadcast_recipients").update({ status: "sent", sent_at: new Date().toISOString() }).eq("id", recipient.id);
         await db.from("broadcast_contacts").update({ status: "sent" }).eq("broadcast_id", broadcastId).eq("contact_id", recipient.contact_id);
         totalSent++;
       } catch (err: any) {
         console.error(`[broadcast-send] Failed ${phone}:`, err?.message);
+
+        // Persist failed message too
+        if (conversationId) {
+          await db.from("messages").insert({
+            conversation_id: conversationId,
+            workspace_id: workspaceId,
+            sender_type: "system",
+            content: personalizedMsg,
+            message_type: "text",
+            status: "failed",
+          });
+        }
+
         await db.from("broadcast_recipients").update({ status: "failed", failed_at: new Date().toISOString(), error_message: (err?.message || "Erro").substring(0, 255) }).eq("id", recipient.id);
         totalFailed++;
       }
