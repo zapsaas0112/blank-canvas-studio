@@ -41,6 +41,23 @@ export function useConversations() {
 
   useEffect(() => { fetch(); }, [fetch]);
 
+  // Realtime subscription for conversations list
+  useEffect(() => {
+    if (!workspace) return;
+    const channel = supabase
+      .channel('conversations-list-rt')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'conversations',
+        filter: `workspace_id=eq.${workspace.id}`,
+      }, () => {
+        fetch();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [workspace?.id, fetch]);
+
   async function assign(convId: string, userId: string) {
     await supabase.from('conversations').update({ assigned_user_id: userId, status: 'open' }).eq('id', convId);
     await fetch();
