@@ -13,16 +13,19 @@ function buildSlug(name: string) {
 }
 
 export default function Onboarding() {
-  const { user, profile, refreshWorkspace, hasWorkspace, loading: authLoading } = useAuth();
+  const { user, profile, refreshWorkspace, hasWorkspace, initialized, loading: authLoading } = useAuth();
   const navigate = useNavigate();
   const [workspaceName, setWorkspaceName] = useState('');
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (authLoading) return;
-    if (!user) navigate('/login', { replace: true });
-    else if (hasWorkspace) navigate('/', { replace: true });
-  }, [authLoading, user, hasWorkspace, navigate]);
+    if (!initialized || authLoading) return;
+    if (!user) {
+      navigate('/login', { replace: true });
+    } else if (hasWorkspace) {
+      navigate('/', { replace: true });
+    }
+  }, [initialized, authLoading, user, hasWorkspace, navigate]);
 
   async function createWorkspaceWithUniqueSlug(name: string, ownerId: string) {
     const baseSlug = buildSlug(name) || 'workspace';
@@ -55,7 +58,6 @@ export default function Onboarding() {
     try {
       const ws = await createWorkspaceWithUniqueSlug(workspaceName.trim(), user.id);
 
-      // 2. Add as member (owner)
       const { error: memErr } = await supabase.from('workspace_members').insert({
         workspace_id: ws.id,
         user_id: user.id,
@@ -63,7 +65,6 @@ export default function Onboarding() {
       });
       if (memErr) throw memErr;
 
-      // 3. Create default agent
       await supabase.from('agents').insert({
         workspace_id: ws.id,
         user_id: user.id,
@@ -74,7 +75,7 @@ export default function Onboarding() {
 
       await refreshWorkspace();
       toast.success('Workspace criado com sucesso!');
-      navigate('/');
+      // refreshWorkspace sets hasWorkspace=true, useEffect will redirect
     } catch (err: any) {
       if (err?.code === '42501') {
         toast.error('Permissão negada ao criar workspace. Faça login novamente e tente de novo.');
@@ -85,6 +86,9 @@ export default function Onboarding() {
       setLoading(false);
     }
   }
+
+  // Don't render form until we know user is authenticated without workspace
+  if (!initialized || authLoading || !user) return null;
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">

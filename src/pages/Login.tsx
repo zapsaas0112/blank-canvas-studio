@@ -1,6 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
+import { useAuth } from '@/contexts/AuthContext';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -9,26 +10,50 @@ import { toast } from 'sonner';
 
 export default function Login() {
   const navigate = useNavigate();
+  const { user, hasWorkspace, initialized, loading: authLoading } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [isResetMode, setIsResetMode] = useState(false);
 
+  // If already authenticated, redirect away from login
+  useEffect(() => {
+    if (!initialized || authLoading) return;
+    if (user) {
+      console.log('[Login] Already authenticated, redirecting', hasWorkspace ? '/' : '/onboarding');
+      navigate(hasWorkspace ? '/' : '/onboarding', { replace: true });
+    }
+  }, [user, hasWorkspace, initialized, authLoading, navigate]);
+
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return; // prevent double-click
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
-    if (error) {
-      toast.error(error.message === 'Invalid login credentials' ? 'Email ou senha incorretos' : error.message);
-    } else {
-      navigate('/');
+    console.log('[Login] Attempting sign in...');
+
+    try {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        console.log('[Login] Error:', error.message);
+        toast.error(error.message === 'Invalid login credentials' ? 'Email ou senha incorretos' : error.message);
+        setLoading(false);
+        return;
+      }
+      console.log('[Login] Sign in success, AuthContext will handle redirect');
+      // Don't navigate here — the useEffect above will redirect
+      // once AuthContext finishes loading user data.
+      // Keep loading=true so button stays disabled during transition.
+    } catch (err: any) {
+      console.error('[Login] Unexpected error:', err);
+      toast.error('Erro de conexão. Tente novamente.');
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const handleResetPassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (loading) return;
     setLoading(true);
     const { error } = await supabase.auth.resetPasswordForEmail(email, {
       redirectTo: `${window.location.origin}/reset-password`,
