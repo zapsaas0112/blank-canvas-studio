@@ -19,6 +19,7 @@ import BotConfig from "./pages/BotConfig";
 import QuickReplies from "./pages/QuickReplies";
 import Tags from "./pages/Tags";
 import Settings from "./pages/Settings";
+import Team from "./pages/Team";
 import NotFound from "./pages/NotFound";
 
 const queryClient = new QueryClient();
@@ -44,6 +45,7 @@ const App = () => (
               <Route path="/bot" element={<ProtectedRoute><BotConfig /></ProtectedRoute>} />
               <Route path="/quick-replies" element={<ProtectedRoute><QuickReplies /></ProtectedRoute>} />
               <Route path="/tags" element={<ProtectedRoute><Tags /></ProtectedRoute>} />
+              <Route path="/team" element={<ProtectedRoute><Team /></ProtectedRoute>} />
               <Route path="/settings" element={<ProtectedRoute><Settings /></ProtectedRoute>} />
               <Route path="*" element={<NotFound />} />
             </Routes>
