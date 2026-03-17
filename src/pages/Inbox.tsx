@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { useConversations, useConversationMessages } from '@/hooks/useConversations';
@@ -6,7 +6,7 @@ import AppLayout from '@/components/AppLayout';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Search, Send, Paperclip, UserPlus, Check, CheckCheck, Phone, X, ChevronLeft, MessageSquare } from 'lucide-react';
+import { Search, Send, UserPlus, Check, CheckCheck, Phone, X, ChevronLeft, MessageSquare, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
@@ -21,27 +21,34 @@ const FILTERS = [
 
 export default function Inbox() {
   const { user, workspace } = useAuth();
-  const { conversations, refetch: refetchConvs, assign, close } = useConversations();
+  const { conversations, loading: convsLoading, refetch: refetchConvs, assign, close } = useConversations();
   const [selectedConv, setSelectedConv] = useState<string | null>(null);
-  const { messages, refetch: refetchMsgs, send } = useConversationMessages(selectedConv);
+  const { messages, loading: msgsLoading, refetch: refetchMsgs, send } = useConversationMessages(selectedConv);
   const [filter, setFilter] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [newMessage, setNewMessage] = useState('');
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [sending, setSending] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Realtime subscription
   useEffect(() => {
     if (!workspace) return;
     const channel = supabase
       .channel('realtime-inbox')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations' }, () => refetchConvs())
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, () => {
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `workspace_id=eq.${workspace.id}` }, () => refetchConvs())
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `workspace_id=eq.${workspace.id}` }, () => {
         refetchMsgs();
         refetchConvs();
       })
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [workspace?.id, selectedConv]);
+
+  // Scroll to bottom on new messages
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   function handleSelectConv(id: string) {
     setSelectedConv(id);
@@ -93,7 +100,8 @@ export default function Inbox() {
   return (
     <AppLayout>
       <div className="flex h-full">
-        <div className={cn("w-full md:w-80 lg:w-96 border-r border-border flex flex-col shrink-0 bg-card/30", showMobileChat && "hidden md:flex")}>
+        {/* ── Conversation list ── */}
+        <div className={cn("w-full md:w-80 lg:w-96 border-r border-border flex flex-col shrink-0 bg-card/50", showMobileChat && "hidden md:flex")}>
           <div className="p-3 border-b border-border space-y-3">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -108,7 +116,14 @@ export default function Inbox() {
             </div>
           </div>
           <div className="flex-1 overflow-y-auto">
-            {filtered.length === 0 && <p className="text-sm text-muted-foreground text-center py-8">Nenhuma conversa</p>}
+            {convsLoading && <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-primary" /></div>}
+            {!convsLoading && filtered.length === 0 && (
+              <div className="text-center py-12 px-4">
+                <MessageSquare className="w-10 h-10 text-muted-foreground/30 mx-auto mb-3" />
+                <p className="text-sm text-muted-foreground">Nenhuma conversa</p>
+                <p className="text-xs text-muted-foreground mt-1">Mensagens recebidas aparecerão aqui</p>
+              </div>
+            )}
             {filtered.map(conv => (
               <button key={conv.id} onClick={() => handleSelectConv(conv.id)} className={cn('w-full flex items-center gap-3 p-3 border-b border-border/50 transition-colors text-left', selectedConv === conv.id ? 'bg-accent' : 'hover:bg-muted/50')}>
                 <div className="w-10 h-10 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary shrink-0">
@@ -121,7 +136,7 @@ export default function Inbox() {
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     <p className="text-xs text-muted-foreground truncate flex-1">{conv.customer?.phone}</p>
-                    <div className={cn('w-2 h-2 rounded-full shrink-0', conv.status === 'open' ? 'bg-primary' : conv.status === 'unassigned' ? 'bg-yellow-500' : 'bg-muted-foreground/30')} />
+                    <div className={cn('w-2 h-2 rounded-full shrink-0', conv.status === 'open' ? 'bg-primary' : conv.status === 'unassigned' ? 'bg-warning' : 'bg-muted-foreground/30')} />
                   </div>
                 </div>
               </button>
@@ -129,10 +144,11 @@ export default function Inbox() {
           </div>
         </div>
 
+        {/* ── Chat area ── */}
         <div className={cn("flex-1 flex flex-col min-w-0", !showMobileChat && "hidden md:flex")}>
           {selected ? (
             <>
-              <div className="h-14 border-b border-border flex items-center px-4 gap-3 shrink-0">
+              <div className="h-14 border-b border-border flex items-center px-4 gap-3 shrink-0 bg-card/50">
                 <button onClick={() => setShowMobileChat(false)} className="md:hidden text-muted-foreground hover:text-foreground"><ChevronLeft className="w-5 h-5" /></button>
                 <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">{selected.customer?.name?.charAt(0)?.toUpperCase() || '?'}</div>
                 <div className="flex-1 min-w-0">
@@ -150,10 +166,11 @@ export default function Inbox() {
                 </div>
               </div>
               <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                {msgsLoading && <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-primary" /></div>}
                 {messages.map(msg => (
                   <div key={msg.id} className={cn('flex', msg.sender_type === 'agent' ? 'justify-end' : 'justify-start')}>
                     <div className={cn('max-w-[70%] px-3.5 py-2 rounded-2xl text-sm', msg.sender_type === 'agent' ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-muted text-foreground rounded-bl-md')}>
-                      <p>{msg.content}</p>
+                      <p className="whitespace-pre-wrap">{msg.content}</p>
                       <div className={cn('flex items-center gap-1 mt-1', msg.sender_type === 'agent' ? 'justify-end' : 'justify-start')}>
                         <span className="text-[10px] opacity-60">{format(new Date(msg.created_at), 'HH:mm')}</span>
                         {msg.sender_type === 'agent' && (
@@ -167,13 +184,13 @@ export default function Inbox() {
                     </div>
                   </div>
                 ))}
+                <div ref={messagesEndRef} />
               </div>
-              <div className="p-3 border-t border-border">
+              <div className="p-3 border-t border-border bg-card/50">
                 <div className="flex items-center gap-2">
-                  <Button variant="ghost" size="icon" className="shrink-0 text-muted-foreground h-9 w-9"><Paperclip className="w-4 h-4" /></Button>
                   <Input placeholder="Digite uma mensagem..." value={newMessage} onChange={e => setNewMessage(e.target.value)} onKeyDown={e => e.key === 'Enter' && !e.shiftKey && handleSend()} className="bg-muted/50 border-border h-9 text-sm" disabled={sending} />
                   <Button size="icon" className="shrink-0 h-9 w-9" onClick={handleSend} disabled={!newMessage.trim() || sending}>
-                    {sending ? <div className="w-4 h-4 border-2 border-current border-t-transparent rounded-full animate-spin" /> : <Send className="w-4 h-4" />}
+                    {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                   </Button>
                 </div>
               </div>
@@ -182,12 +199,14 @@ export default function Inbox() {
             <div className="flex-1 flex items-center justify-center">
               <div className="text-center">
                 <div className="w-16 h-16 rounded-2xl bg-muted flex items-center justify-center mx-auto mb-4"><MessageSquare className="w-7 h-7 text-muted-foreground" /></div>
-                <p className="text-sm text-muted-foreground">Selecione uma conversa para começar</p>
+                <p className="text-sm font-medium text-foreground">Selecione uma conversa</p>
+                <p className="text-xs text-muted-foreground mt-1">Mensagens do WhatsApp aparecerão aqui em tempo real</p>
               </div>
             </div>
           )}
         </div>
 
+        {/* ── Contact details panel ── */}
         {selected && (
           <div className="hidden xl:flex w-72 border-l border-border flex-col p-4 shrink-0 bg-card/30">
             <div className="text-center mb-6">

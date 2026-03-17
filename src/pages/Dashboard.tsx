@@ -3,9 +3,6 @@ import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import AppLayout from '@/components/AppLayout';
 import { MessageSquare, CheckCircle2, Users, Send, TrendingUp } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-
-const CHART_COLORS = ['hsl(142,70%,45%)', 'hsl(217,91%,60%)', 'hsl(38,92%,50%)', 'hsl(0,72%,51%)'];
 
 function StatsCard({ icon: Icon, label, value, color }: { icon: React.ElementType; label: string; value: number; color: string }) {
   return (
@@ -25,15 +22,13 @@ function StatsCard({ icon: Icon, label, value, color }: { icon: React.ElementTyp
 export default function Dashboard() {
   const { workspace } = useAuth();
   const [stats, setStats] = useState({ open: 0, resolved: 0, agents: 0, messages: 0, contacts: 0, broadcasts: 0 });
-  const [lineData, setLineData] = useState<any[]>([]);
-  const [pieData, setPieData] = useState<any[]>([]);
 
   useEffect(() => { if (workspace) fetchStats(); }, [workspace?.id]);
 
   async function fetchStats() {
     if (!workspace) return;
     const [convRes, msgRes, agentRes, contactRes, broadcastRes] = await Promise.all([
-      supabase.from('conversations').select('status, created_at').eq('workspace_id', workspace.id),
+      supabase.from('conversations').select('status').eq('workspace_id', workspace.id),
       supabase.from('messages').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
       supabase.from('agents').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
       supabase.from('customers').select('id', { count: 'exact', head: true }).eq('workspace_id', workspace.id),
@@ -49,21 +44,6 @@ export default function Dashboard() {
       contacts: contactRes.count || 0,
       broadcasts: broadcastRes.count || 0,
     });
-
-    const statusCounts = [
-      { name: 'Aberto', value: convs.filter(c => c.status === 'open').length },
-      { name: 'Pendente', value: convs.filter(c => c.status === 'unassigned').length },
-      { name: 'Resolvido', value: closed },
-    ].filter(d => d.value > 0);
-    setPieData(statusCounts.length > 0 ? statusCounts : [{ name: 'Sem dados', value: 1 }]);
-
-    const days = [];
-    for (let i = 6; i >= 0; i--) {
-      const d = new Date(); d.setDate(d.getDate() - i);
-      const dayStr = d.toISOString().split('T')[0];
-      days.push({ day: d.toLocaleDateString('pt-BR', { weekday: 'short' }), conversas: convs.filter(c => c.created_at?.startsWith(dayStr)).length });
-    }
-    setLineData(days);
   }
 
   return (
@@ -73,44 +53,17 @@ export default function Dashboard() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatsCard icon={MessageSquare} label="Conversas abertas" value={stats.open} color="hsl(142,70%,45%)" />
           <StatsCard icon={CheckCircle2} label="Resolvidas" value={stats.resolved} color="hsl(217,91%,60%)" />
-          <StatsCard icon={Users} label="Agentes" value={stats.agents} color="hsl(38,92%,50%)" />
+          <StatsCard icon={Users} label="Contatos" value={stats.contacts} color="hsl(38,92%,50%)" />
           <StatsCard icon={Send} label="Mensagens" value={stats.messages} color="hsl(280,70%,55%)" />
         </div>
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="glass-card p-5 lg:col-span-2">
-            <h3 className="text-sm font-semibold text-foreground mb-4">Conversas por dia</h3>
-            <div className="h-[240px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={lineData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(225,15%,16%)" />
-                  <XAxis dataKey="day" tick={{ fill: 'hsl(220,10%,50%)', fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <YAxis tick={{ fill: 'hsl(220,10%,50%)', fontSize: 12 }} axisLine={false} tickLine={false} />
-                  <Tooltip contentStyle={{ backgroundColor: 'hsl(225,20%,12%)', border: '1px solid hsl(225,15%,16%)', borderRadius: 8, color: 'hsl(220,14%,92%)' }} />
-                  <Line type="monotone" dataKey="conversas" stroke="hsl(142,70%,45%)" strokeWidth={2} dot={{ fill: 'hsl(142,70%,45%)', r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+          <div className="glass-card p-5">
+            <p className="text-xs text-muted-foreground">Agentes</p>
+            <p className="text-2xl font-bold text-foreground mt-1">{stats.agents}</p>
           </div>
           <div className="glass-card p-5">
-            <h3 className="text-sm font-semibold text-foreground mb-4">Por status</h3>
-            <div className="h-[240px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie data={pieData} cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={4} dataKey="value">
-                    {pieData.map((_, i) => (<Cell key={i} fill={CHART_COLORS[i % CHART_COLORS.length]} />))}
-                  </Pie>
-                  <Tooltip contentStyle={{ backgroundColor: 'hsl(225,20%,12%)', border: '1px solid hsl(225,15%,16%)', borderRadius: 8, color: 'hsl(220,14%,92%)' }} />
-                </PieChart>
-              </ResponsiveContainer>
-            </div>
-            <div className="flex flex-wrap gap-3 mt-2 justify-center">
-              {pieData.map((d, i) => (
-                <div key={d.name} className="flex items-center gap-1.5">
-                  <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: CHART_COLORS[i % CHART_COLORS.length] }} />
-                  <span className="text-xs text-muted-foreground">{d.name}</span>
-                </div>
-              ))}
-            </div>
+            <p className="text-xs text-muted-foreground">Disparos</p>
+            <p className="text-2xl font-bold text-foreground mt-1">{stats.broadcasts}</p>
           </div>
         </div>
       </div>

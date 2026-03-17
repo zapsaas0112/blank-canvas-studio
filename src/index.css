@@ -5,7 +5,55 @@
 @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&display=swap');
 
 @layer base {
+  /* ═══════ LIGHT THEME (default) ═══════ */
   :root {
+    --background: 0 0% 98%;
+    --foreground: 224 20% 15%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 224 20% 15%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 224 20% 15%;
+
+    --primary: 142 70% 42%;
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 217 91% 55%;
+    --secondary-foreground: 0 0% 100%;
+
+    --muted: 220 14% 96%;
+    --muted-foreground: 220 10% 46%;
+
+    --accent: 220 14% 93%;
+    --accent-foreground: 224 20% 15%;
+
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 13% 90%;
+    --input: 220 13% 90%;
+    --ring: 142 70% 42%;
+
+    --radius: 0.625rem;
+
+    --success: 142 70% 42%;
+    --warning: 38 92% 50%;
+    --info: 217 91% 55%;
+
+    --sidebar-background: 0 0% 100%;
+    --sidebar-foreground: 220 10% 40%;
+    --sidebar-primary: 142 70% 42%;
+    --sidebar-primary-foreground: 0 0% 100%;
+    --sidebar-accent: 220 14% 96%;
+    --sidebar-accent-foreground: 224 20% 15%;
+    --sidebar-border: 220 13% 92%;
+    --sidebar-ring: 142 70% 42%;
+    --sidebar-muted: 220 10% 60%;
+  }
+
+  /* ═══════ DARK THEME ═══════ */
+  .dark {
     --background: 225 23% 7%;
     --foreground: 220 14% 92%;
 
@@ -33,8 +81,6 @@
     --border: 225 15% 16%;
     --input: 225 15% 18%;
     --ring: 142 70% 45%;
-
-    --radius: 0.625rem;
 
     --success: 142 70% 45%;
     --warning: 38 92% 50%;
@@ -65,12 +111,11 @@
 
 @layer components {
   .glass-card {
-    @apply bg-card/80 backdrop-blur-md border border-border/50 rounded-xl;
-    box-shadow: 0 4px 24px -4px rgba(0, 0, 0, 0.3);
+    @apply bg-card border border-border rounded-xl shadow-sm;
   }
 
   .glass-card-hover {
-    @apply glass-card transition-all duration-200 hover:border-primary/30 hover:shadow-lg;
+    @apply glass-card transition-all duration-200 hover:border-primary/30 hover:shadow-md;
   }
 
   .status-badge {
@@ -92,10 +137,10 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: hsl(220 10% 50% / 0.2);
+  background: hsl(var(--muted-foreground) / 0.2);
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: hsl(220 10% 50% / 0.4);
+  background: hsl(var(--muted-foreground) / 0.4);
 }

@@ -7,12 +7,6 @@ const corsHeaders = {
 
 const OPERATIONS_URL = "https://ipazua.uazapi.com";
 
-async function safeJson(res: Response) {
-  const text = await res.text();
-  try { return { json: JSON.parse(text), raw: text, ok: res.ok, status: res.status }; }
-  catch { return { json: {}, raw: text, ok: res.ok, status: res.status }; }
-}
-
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
@@ -20,60 +14,37 @@ serve(async (req) => {
     const { token } = await req.json();
     if (!token) throw new Error("token é obrigatório");
 
-    // ── Get status ──
     const statusRes = await fetch(`${OPERATIONS_URL}/instance/status`, {
       method: "GET",
       headers: { token },
     });
-    const statusData = await safeJson(statusRes);
 
-    console.log("[whatsapp-status] raw:", statusData.raw.substring(0, 400));
+    const raw = await statusRes.text();
+    let data: any = {};
+    try { data = JSON.parse(raw); } catch {}
 
-    const inst = statusData.json?.instance || statusData.json || {};
-    const statusObj = statusData.json?.status || {};
+    console.log("[whatsapp-status] raw:", raw.substring(0, 400));
+
+    // Parse status robustly
+    const inst = data?.instance || data || {};
+    const statusObj = data?.status || {};
 
     const isConnected =
       statusObj?.connected === true ||
       inst?.status === "open" ||
       inst?.status === "connected" ||
-      statusData.json?.status === "connected";
+      data?.status === "connected";
 
-    const isConnecting = inst?.status === "connecting";
+    const isConnecting = inst?.status === "connecting" || data?.status === "connecting";
 
-    const phoneNumber = inst?.owner || inst?.phone || statusData.json?.phone || null;
-    const profileName = inst?.profileName || inst?.name || statusData.json?.name || null;
+    const phoneNumber = inst?.owner || inst?.phone || data?.phone || null;
+    const profileName = inst?.profileName || inst?.name || data?.name || null;
 
-    // ── Get QR if not connected ──
+    // QR code only when not connected
     let qrCode: string | null = null;
     if (!isConnected) {
-      try {
-        const qrRes = await fetch(`${OPERATIONS_URL}/instance/qrcode`, {
-          method: "GET",
-          headers: { token },
-        });
-        if (qrRes.ok) {
-          const qrData = await safeJson(qrRes);
-          const qi = qrData.json?.instance || qrData.json || {};
-          // Don't return QR if connected
-          if (qi?.status !== "open" && qi?.status !== "connected") {
-            qrCode = qi?.qrcode || qrData.json?.qrcode || qrData.json?.qr || qrData.json?.base64 || null;
-          }
-        }
-      } catch {}
+      qrCode = inst?.qrcode || data?.qrcode || data?.qr || data?.base64 || null;
     }
-
-    // ── Get webhook info ──
-    let webhookInfo: any = null;
-    try {
-      const whRes = await fetch(`${OPERATIONS_URL}/webhook`, {
-        method: "GET",
-        headers: { token },
-      });
-      if (whRes.ok) {
-        const whData = await safeJson(whRes);
-        webhookInfo = whData.json;
-      }
-    } catch {}
 
     return new Response(
       JSON.stringify({
@@ -82,8 +53,7 @@ serve(async (req) => {
         qrCode,
         phoneNumber,
         profileName,
-        webhook: webhookInfo,
-        rawStatus: statusData.raw.substring(0, 500),
+        rawStatus: raw.substring(0, 500),
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
