@@ -6,7 +6,8 @@ import AppLayout from '@/components/AppLayout';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Search, Send, UserPlus, Check, CheckCheck, Phone, X, ChevronLeft, MessageSquare, Loader2 } from 'lucide-react';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Search, Send, UserPlus, UserMinus, Check, CheckCheck, Phone, X, ChevronLeft, MessageSquare, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
@@ -25,11 +26,20 @@ export default function Inbox() {
   const [selectedConv, setSelectedConv] = useState<string | null>(null);
   const { messages, loading: msgsLoading, refetch: refetchMsgs, send } = useConversationMessages(selectedConv);
   const [filter, setFilter] = useState('all');
+  const [agentFilter, setAgentFilter] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [newMessage, setNewMessage] = useState('');
   const [showMobileChat, setShowMobileChat] = useState(false);
   const [sending, setSending] = useState(false);
+  const [agents, setAgents] = useState<{ user_id: string; name: string }[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Load agents for filter
+  useEffect(() => {
+    if (!workspace) return;
+    supabase.from('agents').select('user_id, name').eq('workspace_id', workspace.id).eq('is_active', true)
+      .then(({ data }) => { if (data) setAgents(data); });
+  }, [workspace?.id]);
 
   // Realtime subscription
   useEffect(() => {
@@ -45,7 +55,6 @@ export default function Inbox() {
     return () => { supabase.removeChannel(channel); };
   }, [workspace?.id, selectedConv]);
 
-  // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -59,7 +68,6 @@ export default function Inbox() {
     if (!selectedConv || !user || !newMessage.trim() || !workspace) return;
     const selected = conversations.find(c => c.id === selectedConv);
     const customerPhone = selected?.customer?.phone || undefined;
-
     setSending(true);
     try {
       await send(newMessage.trim(), user.id, workspace.id, customerPhone);
@@ -77,6 +85,12 @@ export default function Inbox() {
     toast.success('Conversa atribuída a você');
   }
 
+  async function handleUnassign(convId: string) {
+    await supabase.from('conversations').update({ assigned_user_id: null, status: 'unassigned' }).eq('id', convId);
+    refetchConvs();
+    toast.success('Conversa desatribuída');
+  }
+
   async function handleClose(convId: string) {
     await close(convId);
     toast.success('Conversa encerrada');
@@ -91,6 +105,9 @@ export default function Inbox() {
     if (filter === 'mine') return c.assigned_user_id === user?.id;
     return true;
   }).filter(c => {
+    if (agentFilter !== 'all') return c.assigned_user_id === agentFilter;
+    return true;
+  }).filter(c => {
     if (!searchTerm) return true;
     const name = c.customer?.name?.toLowerCase() || '';
     const phone = c.customer?.phone || '';
@@ -102,7 +119,7 @@ export default function Inbox() {
       <div className="flex h-full">
         {/* ── Conversation list ── */}
         <div className={cn("w-full md:w-80 lg:w-96 border-r border-border flex flex-col shrink-0 bg-card/50", showMobileChat && "hidden md:flex")}>
-          <div className="p-3 border-b border-border space-y-3">
+          <div className="p-3 border-b border-border space-y-2">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
               <Input placeholder="Buscar conversa..." value={searchTerm} onChange={e => setSearchTerm(e.target.value)} className="pl-9 bg-muted/50 border-border h-9 text-sm" />
@@ -114,6 +131,15 @@ export default function Inbox() {
                 </button>
               ))}
             </div>
+            {agents.length > 1 && (
+              <Select value={agentFilter} onValueChange={setAgentFilter}>
+                <SelectTrigger className="h-8 text-xs bg-muted/50 border-border"><SelectValue placeholder="Filtrar por atendente" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os atendentes</SelectItem>
+                  {agents.map(a => <SelectItem key={a.user_id} value={a.user_id}>{a.name}</SelectItem>)}
+                </SelectContent>
+              </Select>
+            )}
           </div>
           <div className="flex-1 overflow-y-auto">
             {convsLoading && <div className="flex justify-center py-8"><Loader2 className="w-5 h-5 animate-spin text-primary" /></div>}
@@ -136,8 +162,11 @@ export default function Inbox() {
                   </div>
                   <div className="flex items-center gap-2 mt-0.5">
                     <p className="text-xs text-muted-foreground truncate flex-1">{conv.customer?.phone}</p>
-                    <div className={cn('w-2 h-2 rounded-full shrink-0', conv.status === 'open' ? 'bg-primary' : conv.status === 'unassigned' ? 'bg-warning' : 'bg-muted-foreground/30')} />
+                    <div className={cn('w-2 h-2 rounded-full shrink-0', conv.status === 'open' ? 'bg-primary' : conv.status === 'unassigned' ? 'bg-yellow-500' : 'bg-muted-foreground/30')} />
                   </div>
+                  {conv.assigned_profile?.name && (
+                    <p className="text-[10px] text-muted-foreground mt-0.5">👤 {conv.assigned_profile.name}</p>
+                  )}
                 </div>
               </button>
             ))}
@@ -153,13 +182,21 @@ export default function Inbox() {
                 <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-sm font-semibold text-primary">{selected.customer?.name?.charAt(0)?.toUpperCase() || '?'}</div>
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-foreground truncate">{selected.customer?.name}</p>
-                  <p className="text-[10px] text-muted-foreground">{selected.customer?.phone}</p>
+                  <div className="flex items-center gap-2">
+                    <p className="text-[10px] text-muted-foreground">{selected.customer?.phone}</p>
+                    {selected.assigned_profile?.name && (
+                      <Badge variant="outline" className="text-[10px] h-4 px-1.5">👤 {selected.assigned_profile.name}</Badge>
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center gap-1">
                   {selected.tags?.map(tag => (<Badge key={tag.id} variant="outline" className="text-[10px] h-5" style={{ borderColor: tag.color, color: tag.color }}>{tag.name}</Badge>))}
                   {selected.status !== 'closed' && (
                     <>
                       <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={() => handleAssign(selected.id)}><UserPlus className="w-3.5 h-3.5 mr-1" /> Atribuir</Button>
+                      {selected.assigned_user_id && (
+                        <Button size="sm" variant="ghost" className="h-8 text-xs text-orange-600" onClick={() => handleUnassign(selected.id)}><UserMinus className="w-3.5 h-3.5 mr-1" /> Desatribuir</Button>
+                      )}
                       <Button size="sm" variant="ghost" className="h-8 text-xs text-destructive" onClick={() => handleClose(selected.id)}><X className="w-3.5 h-3.5 mr-1" /> Encerrar</Button>
                     </>
                   )}
