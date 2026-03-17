@@ -15,114 +15,168 @@ serve(async (req) => {
 
   try {
     const payload = await req.json();
-    console.log("[webhook] Received:", JSON.stringify(payload).substring(0, 600));
+    console.log("[webhook] Received:", JSON.stringify(payload).substring(0, 800));
 
-    // Extract event type
-    const eventType = payload?.event || payload?.type || "unknown";
+    // ── UAZAPI sends: { EventType, instance, token, owner, ... }
+    const eventType = payload?.EventType || payload?.event || payload?.type || "unknown";
+    const instanceToken = payload?.token || null;
 
-    // Extract message data
+    // ── Find instance in DB by token
+    let instanceRow: any = null;
+    if (instanceToken) {
+      const { data } = await db.from("instances").select("id, workspace_id").eq("token", instanceToken).maybeSingle();
+      instanceRow = data;
+    }
+    if (!instanceRow) {
+      // Try finding any active instance
+      const { data } = await db.from("instances").select("id, workspace_id").eq("is_active", true).limit(1).maybeSingle();
+      instanceRow = data;
+    }
+
+    // ── Save webhook event
+    const { data: eventRow } = await db.from("webhook_events").insert({
+      event_type: eventType,
+      instance_id: instanceRow?.id || null,
+      payload,
+      processed: false,
+    }).select("id").single();
+
+    // ── Handle connection events: update instance status
+    if (eventType === "connection") {
+      const instStatus = payload?.instance?.status;
+      const owner = payload?.owner;
+      const profileName = payload?.instance?.name || payload?.instanceName;
+
+      if (instanceRow && instStatus === "connected") {
+        await db.from("instances").update({
+          status: "connected",
+          is_active: true,
+          phone_number: owner || null,
+          name: profileName || "WhatsApp",
+          updated_at: new Date().toISOString(),
+        }).eq("id", instanceRow.id);
+      } else if (instanceRow && (instStatus === "disconnected" || instStatus === "close")) {
+        await db.from("instances").update({
+          status: "disconnected",
+          is_active: false,
+          updated_at: new Date().toISOString(),
+        }).eq("id", instanceRow.id);
+      }
+
+      if (eventRow?.id) {
+        await db.from("webhook_events").update({ processed: true }).eq("id", eventRow.id);
+      }
+
+      return new Response(
+        JSON.stringify({ success: true, event: "connection", status: instStatus }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // ── Handle message events
+    // UAZAPI message format: payload.message or payload.data
     const message = payload?.message || payload?.data?.message || payload?.data || {};
-    const from = message?.from || payload?.from || message?.key?.remoteJid || "unknown";
-    const text = message?.body || message?.text || message?.conversation || message?.message?.conversation || "";
-    const messageType = message?.type || message?.messageType || "text";
+    const key = message?.key || payload?.key || {};
+    const fromJid = key?.remoteJid || message?.from || payload?.from || "";
+    const isFromMe = key?.fromMe === true || message?.fromMe === true;
+    const text = message?.message?.conversation
+      || message?.message?.extendedTextMessage?.text
+      || message?.body || message?.text || message?.conversation || "";
+    const messageType = message?.messageType || message?.type || "text";
     const pushName = message?.pushName || payload?.pushName || "";
-    const isFromMe = message?.key?.fromMe || message?.fromMe || false;
 
     // Clean phone number
-    const fromNumber = from.replace("@s.whatsapp.net", "").replace("@c.us", "").replace(/\D/g, "");
+    const fromNumber = fromJid.replace("@s.whatsapp.net", "").replace("@c.us", "").replace(/\D/g, "");
 
-    // Skip messages sent by the API itself
+    // Skip own messages (sent by API)
     if (isFromMe) {
       console.log("[webhook] Skipping own message");
+      if (eventRow?.id) await db.from("webhook_events").update({ processed: true }).eq("id", eventRow.id);
       return new Response(
         JSON.stringify({ success: true, skipped: true, reason: "own_message" }),
         { headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // ── Save webhook event ──
-    const { data: eventRow } = await db.from("webhook_events").insert({
-      event_type: eventType,
-      payload,
-      processed: false,
-    }).select("id").single();
-
-    // ── Save webhook message ──
-    if (text || messageType !== "unknown") {
-      await db.from("webhook_messages").insert({
-        webhook_event_id: eventRow?.id,
-        from_number: fromNumber,
-        message_text: text,
-        message_type: messageType,
-        direction: "inbound",
-        raw_payload: payload,
-      });
+    // Skip non-message events or empty messages
+    if (!fromNumber || !text || eventType === "messages_update") {
+      if (eventRow?.id) await db.from("webhook_events").update({ processed: true }).eq("id", eventRow.id);
+      return new Response(
+        JSON.stringify({ success: true, skipped: true, reason: "no_text_content" }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    // ── Find or create customer and conversation ──
-    if (fromNumber && text && eventType !== "connection") {
-      // Find instance by checking all instances
-      const { data: instances } = await db.from("instances").select("id, workspace_id").eq("is_active", true).limit(1);
-      const instance = instances?.[0];
+    // ── Save webhook message
+    await db.from("webhook_messages").insert({
+      webhook_event_id: eventRow?.id,
+      instance_id: instanceRow?.id || null,
+      from_number: fromNumber,
+      message_text: text,
+      message_type: messageType,
+      direction: "inbound",
+      raw_payload: payload,
+    });
 
-      if (instance) {
-        // Find or create customer
-        let { data: customer } = await db.from("customers")
+    // ── Find or create customer
+    if (instanceRow) {
+      let { data: customer } = await db.from("customers")
+        .select("id")
+        .eq("phone", fromNumber)
+        .eq("workspace_id", instanceRow.workspace_id)
+        .maybeSingle();
+
+      if (!customer) {
+        const { data: newCustomer } = await db.from("customers").insert({
+          phone: fromNumber,
+          name: pushName || fromNumber,
+          workspace_id: instanceRow.workspace_id,
+        }).select("id").single();
+        customer = newCustomer;
+      }
+
+      if (customer) {
+        // Find open conversation or create new
+        let { data: conversation } = await db.from("conversations")
           .select("id")
-          .eq("phone", fromNumber)
-          .eq("workspace_id", instance.workspace_id)
+          .eq("customer_id", customer.id)
+          .eq("workspace_id", instanceRow.workspace_id)
+          .neq("status", "closed")
+          .order("created_at", { ascending: false })
+          .limit(1)
           .maybeSingle();
 
-        if (!customer) {
-          const { data: newCustomer } = await db.from("customers").insert({
-            phone: fromNumber,
-            name: pushName || fromNumber,
-            workspace_id: instance.workspace_id,
+        if (!conversation) {
+          const { data: newConv } = await db.from("conversations").insert({
+            customer_id: customer.id,
+            workspace_id: instanceRow.workspace_id,
+            status: "unassigned",
+            last_message_at: new Date().toISOString(),
           }).select("id").single();
-          customer = newCustomer;
+          conversation = newConv;
+        } else {
+          await db.from("conversations")
+            .update({ last_message_at: new Date().toISOString() })
+            .eq("id", conversation.id);
         }
 
-        if (customer) {
-          // Find or create conversation
-          let { data: conversation } = await db.from("conversations")
-            .select("id")
-            .eq("customer_id", customer.id)
-            .eq("workspace_id", instance.workspace_id)
-            .neq("status", "closed")
-            .maybeSingle();
-
-          if (!conversation) {
-            const { data: newConv } = await db.from("conversations").insert({
-              customer_id: customer.id,
-              workspace_id: instance.workspace_id,
-              status: "unassigned",
-              last_message_at: new Date().toISOString(),
-            }).select("id").single();
-            conversation = newConv;
-          } else {
-            await db.from("conversations")
-              .update({ last_message_at: new Date().toISOString() })
-              .eq("id", conversation.id);
-          }
-
-          if (conversation) {
-            await db.from("messages").insert({
-              conversation_id: conversation.id,
-              workspace_id: instance.workspace_id,
-              sender_type: "customer",
-              sender_id: customer.id,
-              content: text,
-              message_type: messageType === "text" ? "text" : messageType,
-              status: "received",
-            });
-          }
+        if (conversation) {
+          await db.from("messages").insert({
+            conversation_id: conversation.id,
+            workspace_id: instanceRow.workspace_id,
+            sender_type: "customer",
+            sender_id: customer.id,
+            content: text,
+            message_type: messageType === "text" ? "text" : messageType,
+            status: "received",
+          });
         }
       }
+    }
 
-      // Mark event as processed
-      if (eventRow?.id) {
-        await db.from("webhook_events").update({ processed: true }).eq("id", eventRow.id);
-      }
+    // Mark processed
+    if (eventRow?.id) {
+      await db.from("webhook_events").update({ processed: true }).eq("id", eventRow.id);
     }
 
     return new Response(
