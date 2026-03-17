@@ -12,6 +12,7 @@ import {
   Wifi,
   Radio,
   Bot,
+  UsersRound,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
@@ -36,6 +37,7 @@ const navItems = [
   { to: '/bot', icon: Bot, label: 'Bot' },
   { to: '/quick-replies', icon: Zap, label: 'Respostas Rápidas' },
   { to: '/tags', icon: Hash, label: 'Tags' },
+  { to: '/team', icon: UsersRound, label: 'Equipe' },
   { to: '/settings', icon: Settings, label: 'Configurações' },
 ];
 
