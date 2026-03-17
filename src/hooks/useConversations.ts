@@ -41,6 +41,23 @@ export function useConversations() {
 
   useEffect(() => { fetch(); }, [fetch]);
 
+  // Realtime subscription for conversations list
+  useEffect(() => {
+    if (!workspace) return;
+    const channel = supabase
+      .channel('conversations-list-rt')
+      .on('postgres_changes', {
+        event: '*',
+        schema: 'public',
+        table: 'conversations',
+        filter: `workspace_id=eq.${workspace.id}`,
+      }, () => {
+        fetch();
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [workspace?.id, fetch]);
+
   async function assign(convId: string, userId: string) {
     await supabase.from('conversations').update({ assigned_user_id: userId, status: 'open' }).eq('id', convId);
     await fetch();
@@ -76,6 +93,35 @@ export function useConversationMessages(conversationId: string | null) {
   }, [conversationId]);
 
   useEffect(() => { fetch(); }, [fetch]);
+
+  // Realtime subscription for messages in the open conversation
+  useEffect(() => {
+    if (!conversationId) return;
+    const channel = supabase
+      .channel(`messages-rt-${conversationId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `conversation_id=eq.${conversationId}`,
+      }, (payload) => {
+        setMessages(prev => {
+          // Avoid duplicates
+          if (prev.some(m => m.id === (payload.new as any).id)) return prev;
+          return [...prev, payload.new as Message];
+        });
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages',
+        filter: `conversation_id=eq.${conversationId}`,
+      }, (payload) => {
+        setMessages(prev => prev.map(m => m.id === (payload.new as any).id ? (payload.new as Message) : m));
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [conversationId]);
 
   /**
    * Send message: saves to DB AND sends via WhatsApp

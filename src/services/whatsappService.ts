@@ -5,7 +5,6 @@ import { normalizeWhatsAppNumber, isValidWhatsAppNumber } from '@/lib/whatsapp-u
  * Get the active WhatsApp instance token from Supabase (primary) or localStorage (fallback)
  */
 export async function getActiveToken(): Promise<{ token: string; instanceId: string } | null> {
-  // Primary: from Supabase instances table
   try {
     const { data } = await supabase
       .from('instances')
@@ -20,7 +19,6 @@ export async function getActiveToken(): Promise<{ token: string; instanceId: str
     }
   } catch {}
 
-  // Fallback: localStorage
   try {
     const saved = localStorage.getItem('whatsapp_connection');
     if (saved) {
@@ -33,7 +31,8 @@ export async function getActiveToken(): Promise<{ token: string; instanceId: str
 }
 
 /**
- * Send a WhatsApp text message with full validation
+ * Send a WhatsApp text message with full validation.
+ * This ONLY sends via API. Persistence is handled by the caller or by sendAndPersistMessage.
  */
 export async function sendWhatsAppMessage(
   phone: string,
@@ -64,6 +63,100 @@ export async function sendWhatsAppMessage(
   }
 
   return data;
+}
+
+/**
+ * Unified outbound message: sends via WhatsApp AND persists to messages + conversations.
+ * Use this for test sends, manual sends outside a conversation, etc.
+ */
+export async function sendAndPersistMessage(params: {
+  workspaceId: string;
+  phone: string;
+  message: string;
+  senderType: 'agent' | 'bot' | 'system';
+  senderId?: string;
+  contactName?: string;
+}): Promise<{ success: boolean; conversationId?: string; error?: string }> {
+  const { workspaceId, phone, message, senderType, senderId, contactName } = params;
+  const normalized = normalizeWhatsAppNumber(phone);
+
+  if (!isValidWhatsAppNumber(normalized)) {
+    throw new Error(`Número inválido: ${phone} → ${normalized}`);
+  }
+
+  // 1. Find or create customer
+  let { data: customer } = await supabase
+    .from('customers')
+    .select('id, name')
+    .eq('phone', normalized)
+    .eq('workspace_id', workspaceId)
+    .maybeSingle();
+
+  if (!customer) {
+    const { data: newCust, error: custErr } = await supabase.from('customers').insert({
+      phone: normalized,
+      name: contactName || normalized,
+      workspace_id: workspaceId,
+    }).select('id, name').single();
+
+    if (custErr) throw new Error(`Erro ao criar contato: ${custErr.message}`);
+    customer = newCust;
+  }
+
+  // 2. Find or create conversation
+  let { data: conversation } = await supabase
+    .from('conversations')
+    .select('id')
+    .eq('customer_id', customer!.id)
+    .eq('workspace_id', workspaceId)
+    .neq('status', 'closed')
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!conversation) {
+    const { data: newConv, error: convErr } = await supabase.from('conversations').insert({
+      customer_id: customer!.id,
+      workspace_id: workspaceId,
+      status: 'unassigned',
+      last_message_at: new Date().toISOString(),
+    }).select('id').single();
+
+    if (convErr) throw new Error(`Erro ao criar conversa: ${convErr.message}`);
+    conversation = newConv;
+  }
+
+  // 3. Send via WhatsApp
+  let apiSuccess = true;
+  let apiError: string | null = null;
+  try {
+    await sendWhatsAppMessage(phone, message);
+  } catch (err: any) {
+    apiSuccess = false;
+    apiError = err?.message || 'Erro ao enviar';
+  }
+
+  // 4. Persist message
+  await supabase.from('messages').insert({
+    conversation_id: conversation!.id,
+    workspace_id: workspaceId,
+    sender_type: senderType,
+    sender_id: senderId || null,
+    content: message,
+    message_type: 'text',
+    status: apiSuccess ? 'sent' : 'failed',
+  });
+
+  // 5. Update conversation
+  await supabase.from('conversations').update({
+    last_message_at: new Date().toISOString(),
+  }).eq('id', conversation!.id);
+
+  if (!apiSuccess) {
+    return { success: false, conversationId: conversation!.id, error: apiError || undefined };
+  }
+
+  return { success: true, conversationId: conversation!.id };
 }
 
 /**
@@ -101,7 +194,6 @@ export async function persistInstance(
     webhookUrl?: string | null;
   }
 ): Promise<string> {
-  // Check if instance already exists with this token
   const { data: existing } = await supabase
     .from('instances')
     .select('id')

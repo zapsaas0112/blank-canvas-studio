@@ -270,9 +270,9 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
     } catch { toast.error("Erro ao deletar"); }
   };
 
-  // ──── Send Test ────
+  // ──── Send Test (unified: sends + persists to messages + conversation) ────
   const sendTestMessage = async () => {
-    if (!connection?.token || !testPhone || !testMessage) return;
+    if (!connection?.token || !testPhone || !testMessage || !workspace) return;
     setSending(true);
     setDiag((prev) => ({ ...prev, lastError: undefined, lastSendDebug: undefined }));
     try {
@@ -281,18 +281,20 @@ const WhatsAppManager = ({ userName }: { userName: string }) => {
         throw new Error(`Número inválido: ${testPhone} → ${normalized}`);
       }
 
-      const { data, error } = await supabase.functions.invoke("whatsapp-send", {
-        body: { token: connection.token, phone: normalized, message: testMessage, checkNumber: true },
+      const result = await whatsappService.sendAndPersistMessage({
+        workspaceId: workspace.id,
+        phone: testPhone,
+        message: testMessage,
+        senderType: "agent",
+        contactName: normalized,
       });
 
-      if (error) throw error;
+      setDiag((prev) => ({ ...prev, lastSendDebug: result }));
 
-      setDiag((prev) => ({ ...prev, lastSendDebug: data }));
-
-      if (data?.success) {
-        toast.success(`Mensagem enviada! ID: ${data.messageId || "OK"}`);
+      if (result.success) {
+        toast.success(`Mensagem enviada e salva! Conv: ${result.conversationId?.substring(0, 8)}`);
       } else {
-        throw new Error(data?.error || "Envio falhou sem mensagem de erro");
+        throw new Error(result.error || "Envio falhou");
       }
     } catch (err: any) {
       setDiag((prev) => ({ ...prev, lastError: err?.message }));
