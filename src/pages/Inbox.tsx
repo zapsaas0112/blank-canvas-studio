@@ -41,19 +41,7 @@ export default function Inbox() {
       .then(({ data }) => { if (data) setAgents(data); });
   }, [workspace?.id]);
 
-  // Realtime subscription
-  useEffect(() => {
-    if (!workspace) return;
-    const channel = supabase
-      .channel('realtime-inbox')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'conversations', filter: `workspace_id=eq.${workspace.id}` }, () => refetchConvs())
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `workspace_id=eq.${workspace.id}` }, () => {
-        refetchMsgs();
-        refetchConvs();
-      })
-      .subscribe();
-    return () => { supabase.removeChannel(channel); };
-  }, [workspace?.id, selectedConv]);
+  // Note: Realtime subscriptions are now handled inside useConversations and useConversationMessages hooks
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
