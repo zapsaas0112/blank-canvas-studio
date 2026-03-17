@@ -23,7 +23,7 @@ export function useBroadcasts() {
 
   useEffect(() => { fetch(); }, [fetch]);
 
-  async function create(name: string, message: string, contactIds: string[], delayMin = 1.5, delayMax = 3) {
+  async function create(name: string, message: string, contactIds: string[], delayMinSec = 20, delayMaxSec = 25) {
     if (!workspace) return;
 
     const conn = await whatsappService.getActiveToken();
@@ -46,9 +46,9 @@ export function useBroadcasts() {
       contactIds.map(cid => ({ broadcast_id: bc.id, contact_id: cid, status: 'pending' }))
     );
 
-    // Fire and forget with configurable delay
+    // Fire and forget — edge function processes in background
     supabase.functions.invoke('broadcast-send', {
-      body: { broadcastId: bc.id, token: conn.token, delayMin, delayMax },
+      body: { broadcastId: bc.id, token: conn.token, delayMin: delayMinSec, delayMax: delayMaxSec },
     }).then(({ data, error: sendErr }) => {
       if (sendErr) console.error('Broadcast send error:', sendErr);
       else console.log('Broadcast send result:', data);
@@ -59,5 +59,14 @@ export function useBroadcasts() {
     return bc;
   }
 
-  return { broadcasts, loading, refetch: fetch, create };
+  async function deleteBroadcast(id: string) {
+    // Delete recipients and contacts first, then broadcast
+    await supabase.from('broadcast_recipients').delete().eq('broadcast_id', id);
+    await supabase.from('broadcast_contacts').delete().eq('broadcast_id', id);
+    const { error } = await supabase.from('broadcasts').delete().eq('id', id);
+    if (error) throw error;
+    await fetch();
+  }
+
+  return { broadcasts, loading, refetch: fetch, create, deleteBroadcast };
 }
