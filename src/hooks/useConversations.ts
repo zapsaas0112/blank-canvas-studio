@@ -94,6 +94,35 @@ export function useConversationMessages(conversationId: string | null) {
 
   useEffect(() => { fetch(); }, [fetch]);
 
+  // Realtime subscription for messages in the open conversation
+  useEffect(() => {
+    if (!conversationId) return;
+    const channel = supabase
+      .channel(`messages-rt-${conversationId}`)
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'messages',
+        filter: `conversation_id=eq.${conversationId}`,
+      }, (payload) => {
+        setMessages(prev => {
+          // Avoid duplicates
+          if (prev.some(m => m.id === (payload.new as any).id)) return prev;
+          return [...prev, payload.new as Message];
+        });
+      })
+      .on('postgres_changes', {
+        event: 'UPDATE',
+        schema: 'public',
+        table: 'messages',
+        filter: `conversation_id=eq.${conversationId}`,
+      }, (payload) => {
+        setMessages(prev => prev.map(m => m.id === (payload.new as any).id ? (payload.new as Message) : m));
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [conversationId]);
+
   /**
    * Send message: saves to DB AND sends via WhatsApp
    */
