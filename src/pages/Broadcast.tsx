@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { useBroadcasts } from '@/hooks/useBroadcasts';
 import { useContacts } from '@/hooks/useContacts';
 import { useTags } from '@/hooks/useTags';
+import { useAuth } from '@/contexts/AuthContext';
 import { supabase } from '@/integrations/supabase/client';
 import AppLayout from '@/components/AppLayout';
 import { Button } from '@/components/ui/button';
@@ -13,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Send, ArrowRight, ArrowLeft, Loader2, Radio, Search, Eye, Pause, Play, XCircle, CheckCircle2, Clock, AlertTriangle, Users, BarChart3 } from 'lucide-react';
+import { Plus, Send, ArrowRight, ArrowLeft, Loader2, Radio, Search, Eye, Pause, Play, XCircle, CheckCircle2, Clock, AlertTriangle, Users, BarChart3, Mail, MailCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { isValidWhatsAppNumber, normalizeWhatsAppNumber } from '@/lib/whatsapp-utils';
@@ -31,6 +32,7 @@ export default function Broadcast() {
   const { broadcasts, loading, create, refetch } = useBroadcasts();
   const { contacts } = useContacts();
   const { tags } = useTags();
+  const { workspace } = useAuth();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
   const [recipients, setRecipients] = useState<Recipient[]>([]);
@@ -44,8 +46,9 @@ export default function Broadcast() {
   const [searchTerm, setSearchTerm] = useState('');
   const [tagFilter, setTagFilter] = useState<string>('all');
   const [contactTags, setContactTags] = useState<Record<string, string[]>>({});
+  const [recipientSearch, setRecipientSearch] = useState('');
 
-  // Load contact_tags for filtering
+  // Load contact_tags
   useEffect(() => {
     (async () => {
       const { data } = await supabase.from('contact_tags').select('contact_id, tag_id');
@@ -59,6 +62,22 @@ export default function Broadcast() {
       }
     })();
   }, []);
+
+  // Realtime for broadcast progress
+  useEffect(() => {
+    if (!workspace) return;
+    const channel = supabase
+      .channel('broadcast-realtime')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'broadcasts', filter: `workspace_id=eq.${workspace.id}` }, () => {
+        refetch();
+        if (detailId) openDetail(detailId);
+      })
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'broadcast_recipients' }, () => {
+        if (detailId) openDetail(detailId);
+      })
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [workspace?.id, detailId]);
 
   function openWizard() { setStep(1); setName(''); setMessage(''); setSelectedContacts([]); setDelayMin(1.5); setDelayMax(3); setSearchTerm(''); setTagFilter('all'); setDialogOpen(true); }
   function toggleContact(id: string) { setSelectedContacts(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]); }
@@ -130,6 +149,11 @@ export default function Broadcast() {
   };
 
   const detailBroadcast = broadcasts.find(b => b.id === detailId);
+  const filteredRecipients = recipients.filter(r => {
+    if (!recipientSearch) return true;
+    const s = recipientSearch.toLowerCase();
+    return (r.customers?.name || '').toLowerCase().includes(s) || (r.customers?.phone || '').includes(s);
+  });
 
   if (loading) return <AppLayout><div className="flex items-center justify-center h-full"><Loader2 className="w-6 h-6 animate-spin text-primary" /></div></AppLayout>;
 
@@ -142,11 +166,12 @@ export default function Broadcast() {
         </div>
 
         {/* Metrics cards */}
-        <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
           <Card className="border-border"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-foreground">{broadcasts.length}</p><p className="text-xs text-muted-foreground">Campanhas</p></CardContent></Card>
           <Card className="border-border"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-primary">{broadcasts.reduce((a, b) => a + (b.total_sent || 0), 0)}</p><p className="text-xs text-muted-foreground">Enviadas</p></CardContent></Card>
+          <Card className="border-border"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-foreground">{broadcasts.reduce((a, b) => a + (b.total_delivered || 0), 0)}</p><p className="text-xs text-muted-foreground">Entregues</p></CardContent></Card>
+          <Card className="border-border"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-foreground">{broadcasts.reduce((a, b) => a + (b.total_read || 0), 0)}</p><p className="text-xs text-muted-foreground">Lidas</p></CardContent></Card>
           <Card className="border-border"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-destructive">{broadcasts.reduce((a, b) => a + (b.total_failed || 0), 0)}</p><p className="text-xs text-muted-foreground">Falhas</p></CardContent></Card>
-          <Card className="border-border"><CardContent className="p-4 text-center"><p className="text-2xl font-bold text-foreground">{broadcasts.reduce((a, b) => a + (b.total_recipients || b.contacts_count || 0), 0)}</p><p className="text-xs text-muted-foreground">Total Destinatários</p></CardContent></Card>
         </div>
 
         {/* Campaign list */}
@@ -193,6 +218,12 @@ export default function Broadcast() {
               <div className="space-y-3">
                 <div><Label className="text-foreground text-sm">Nome da campanha</Label><Input value={name} onChange={e => setName(e.target.value)} className="bg-muted/50 border-border mt-1" /></div>
                 <div><Label className="text-foreground text-sm">Mensagem</Label><Textarea value={message} onChange={e => setMessage(e.target.value)} className="bg-muted/50 border-border mt-1 min-h-[100px]" placeholder="Olá {{name}}, temos novidades..." /><p className="text-[10px] text-muted-foreground mt-1">Use {"{{name}}"} para personalizar</p></div>
+                {message && (
+                  <div className="bg-muted/30 rounded-lg p-3">
+                    <p className="text-[10px] text-muted-foreground mb-1">Preview:</p>
+                    <p className="text-sm text-foreground">{message.replace(/\{\{name\}\}/gi, 'João Silva')}</p>
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-3">
                   <div><Label className="text-foreground text-xs">Delay mínimo (seg)</Label><Input type="number" step="0.5" min="0.5" value={delayMin} onChange={e => setDelayMin(Number(e.target.value))} className="bg-muted/50 border-border mt-1" /></div>
                   <div><Label className="text-foreground text-xs">Delay máximo (seg)</Label><Input type="number" step="0.5" min="1" value={delayMax} onChange={e => setDelayMax(Number(e.target.value))} className="bg-muted/50 border-border mt-1" /></div>
@@ -266,36 +297,66 @@ export default function Broadcast() {
               <div className="space-y-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                   {[
-                    { label: 'Total', value: detailBroadcast.total_recipients || 0, icon: Users },
-                    { label: 'Enviados', value: detailBroadcast.total_sent || 0, icon: CheckCircle2 },
-                    { label: 'Falhas', value: detailBroadcast.total_failed || 0, icon: XCircle },
-                    { label: 'Status', value: detailBroadcast.status, icon: BarChart3 },
+                    { label: 'Total', value: detailBroadcast.total_recipients || 0, icon: Users, color: 'text-foreground' },
+                    { label: 'Enviados', value: detailBroadcast.total_sent || 0, icon: CheckCircle2, color: 'text-primary' },
+                    { label: 'Falhas', value: detailBroadcast.total_failed || 0, icon: XCircle, color: 'text-destructive' },
+                    { label: 'Pendentes', value: Math.max(0, (detailBroadcast.total_recipients || 0) - (detailBroadcast.total_sent || 0) - (detailBroadcast.total_failed || 0)), icon: Clock, color: 'text-yellow-600' },
                   ].map((m, i) => (
-                    <Card key={i} className="border-border"><CardContent className="p-3 text-center"><m.icon className="w-4 h-4 mx-auto mb-1 text-muted-foreground" /><p className="text-lg font-bold text-foreground">{m.value}</p><p className="text-[10px] text-muted-foreground">{m.label}</p></CardContent></Card>
+                    <Card key={i} className="border-border"><CardContent className="p-3 text-center"><m.icon className={`w-4 h-4 mx-auto mb-1 ${m.color}`} /><p className={`text-lg font-bold ${m.color}`}>{m.value}</p><p className="text-[10px] text-muted-foreground">{m.label}</p></CardContent></Card>
                   ))}
                 </div>
+
+                {/* Progress bar */}
+                {detailBroadcast.total_recipients && detailBroadcast.total_recipients > 0 && (
+                  <div className="space-y-1">
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>Progresso</span>
+                      <span>{Math.round(((detailBroadcast.total_sent || 0) + (detailBroadcast.total_failed || 0)) / detailBroadcast.total_recipients * 100)}%</span>
+                    </div>
+                    <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                      <div className="h-full bg-primary rounded-full transition-all duration-500" style={{ width: `${((detailBroadcast.total_sent || 0) + (detailBroadcast.total_failed || 0)) / detailBroadcast.total_recipients * 100}%` }} />
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <Badge className={`text-[10px] border-0 ${statusBadge(detailBroadcast.status)}`}>{detailBroadcast.status}</Badge>
+                  {detailBroadcast.status === 'sending' && <Button variant="outline" size="sm" className="h-7 text-xs text-orange-600" onClick={() => pauseBroadcast(detailBroadcast.id)}><Pause className="w-3 h-3 mr-1" /> Pausar</Button>}
+                  {detailBroadcast.status === 'paused' && <Button variant="outline" size="sm" className="h-7 text-xs text-primary" onClick={() => resumeBroadcast(detailBroadcast.id)}><Play className="w-3 h-3 mr-1" /> Retomar</Button>}
+                  {(detailBroadcast.status === 'sending' || detailBroadcast.status === 'paused') && <Button variant="outline" size="sm" className="h-7 text-xs text-destructive" onClick={() => cancelBroadcast(detailBroadcast.id)}><XCircle className="w-3 h-3 mr-1" /> Cancelar</Button>}
+                </div>
+
                 <div className="glass-card p-3"><p className="text-xs text-muted-foreground">Mensagem:</p><p className="text-sm text-foreground mt-1">{detailBroadcast.message}</p></div>
+
+                {/* Recipient search */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+                  <Input placeholder="Buscar destinatário..." value={recipientSearch} onChange={e => setRecipientSearch(e.target.value)} className="pl-9 bg-muted/50 border-border h-8 text-xs" />
+                </div>
+
                 {recipientsLoading ? <div className="flex justify-center py-4"><Loader2 className="w-5 h-5 animate-spin text-primary" /></div> : (
-                  <Table>
-                    <TableHeader><TableRow className="border-border">
-                      <TableHead className="text-muted-foreground">Contato</TableHead>
-                      <TableHead className="text-muted-foreground">Telefone</TableHead>
-                      <TableHead className="text-muted-foreground">Status</TableHead>
-                      <TableHead className="text-muted-foreground">Horário</TableHead>
-                      <TableHead className="text-muted-foreground">Erro</TableHead>
-                    </TableRow></TableHeader>
-                    <TableBody>
-                      {recipients.map(r => (
-                        <TableRow key={r.id} className="border-border/50">
-                          <TableCell className="text-sm text-foreground">{r.customers?.name || '—'}</TableCell>
-                          <TableCell className="text-sm text-muted-foreground font-mono">{r.customers?.phone || '—'}</TableCell>
-                          <TableCell><Badge className={`text-[10px] border-0 ${r.status === 'sent' ? 'bg-primary/20 text-primary' : r.status === 'failed' ? 'bg-destructive/20 text-destructive' : r.status === 'skipped' ? 'bg-muted text-muted-foreground' : 'bg-yellow-500/20 text-yellow-600'}`}>{r.status}</Badge></TableCell>
-                          <TableCell className="text-xs text-muted-foreground">{r.sent_at ? format(new Date(r.sent_at), 'HH:mm:ss') : '—'}</TableCell>
-                          <TableCell className="text-xs text-destructive max-w-[150px] truncate">{r.error_message || ''}</TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                  <div className="max-h-64 overflow-y-auto">
+                    <Table>
+                      <TableHeader><TableRow className="border-border">
+                        <TableHead className="text-muted-foreground">Contato</TableHead>
+                        <TableHead className="text-muted-foreground">Telefone</TableHead>
+                        <TableHead className="text-muted-foreground">Status</TableHead>
+                        <TableHead className="text-muted-foreground">Horário</TableHead>
+                        <TableHead className="text-muted-foreground">Erro</TableHead>
+                      </TableRow></TableHeader>
+                      <TableBody>
+                        {filteredRecipients.map(r => (
+                          <TableRow key={r.id} className="border-border/50">
+                            <TableCell className="text-sm text-foreground">{r.customers?.name || '—'}</TableCell>
+                            <TableCell className="text-sm text-muted-foreground font-mono">{r.customers?.phone || '—'}</TableCell>
+                            <TableCell><Badge className={`text-[10px] border-0 ${r.status === 'sent' ? 'bg-primary/20 text-primary' : r.status === 'failed' ? 'bg-destructive/20 text-destructive' : r.status === 'skipped' ? 'bg-muted text-muted-foreground' : 'bg-yellow-500/20 text-yellow-600'}`}>{r.status}</Badge></TableCell>
+                            <TableCell className="text-xs text-muted-foreground">{r.sent_at ? format(new Date(r.sent_at), 'HH:mm:ss') : '—'}</TableCell>
+                            <TableCell className="text-xs text-destructive max-w-[150px] truncate">{r.error_message || ''}</TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
                 )}
               </div>
             )}
