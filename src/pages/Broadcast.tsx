@@ -14,7 +14,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Plus, Send, ArrowRight, ArrowLeft, Loader2, Radio, Search, Eye, Pause, Play, XCircle, CheckCircle2, Clock, AlertTriangle, Users, BarChart3, Mail, MailCheck } from 'lucide-react';
+import { Plus, Send, ArrowRight, ArrowLeft, Loader2, Radio, Search, Eye, Pause, Play, XCircle, CheckCircle2, Clock, AlertTriangle, Users, Trash2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { format } from 'date-fns';
 import { isValidWhatsAppNumber, normalizeWhatsAppNumber } from '@/lib/whatsapp-utils';
@@ -28,8 +28,17 @@ interface Recipient {
   customers: { name: string; phone: string } | null;
 }
 
+function interpolatePreview(template: string, name: string): string {
+  let result = template;
+  result = result.replace(/\{\{nome\}\}/gi, name);
+  result = result.replace(/\{\{name\}\}/gi, name);
+  result = result.replace(/\{\{telefone\}\}/gi, '11999999999');
+  result = result.replace(/\{\{phone\}\}/gi, '11999999999');
+  return result;
+}
+
 export default function Broadcast() {
-  const { broadcasts, loading, create, refetch } = useBroadcasts();
+  const { broadcasts, loading, create, refetch, deleteBroadcast } = useBroadcasts();
   const { contacts } = useContacts();
   const { tags } = useTags();
   const { workspace } = useAuth();
@@ -41,12 +50,17 @@ export default function Broadcast() {
   const [name, setName] = useState('');
   const [message, setMessage] = useState('');
   const [selectedContacts, setSelectedContacts] = useState<string[]>([]);
-  const [delayMin, setDelayMin] = useState(1.5);
-  const [delayMax, setDelayMax] = useState(3);
+  const [delayMinStr, setDelayMinStr] = useState('20');
+  const [delayMaxStr, setDelayMaxStr] = useState('25');
   const [searchTerm, setSearchTerm] = useState('');
   const [tagFilter, setTagFilter] = useState<string>('all');
   const [contactTags, setContactTags] = useState<Record<string, string[]>>({});
   const [recipientSearch, setRecipientSearch] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const delayMin = parseFloat(delayMinStr) || 0;
+  const delayMax = parseFloat(delayMaxStr) || 0;
+  const delayValid = delayMin > 0 && delayMax >= delayMin;
 
   // Load contact_tags
   useEffect(() => {
@@ -79,7 +93,13 @@ export default function Broadcast() {
     return () => { supabase.removeChannel(channel); };
   }, [workspace?.id, detailId]);
 
-  function openWizard() { setStep(1); setName(''); setMessage(''); setSelectedContacts([]); setDelayMin(1.5); setDelayMax(3); setSearchTerm(''); setTagFilter('all'); setDialogOpen(true); }
+  function openWizard() {
+    setStep(1); setName(''); setMessage(''); setSelectedContacts([]);
+    setDelayMinStr('20'); setDelayMaxStr('25');
+    setSearchTerm(''); setTagFilter('all'); setSending(false);
+    setDialogOpen(true);
+  }
+
   function toggleContact(id: string) { setSelectedContacts(prev => prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]); }
 
   const filteredContacts = contacts.filter(c => {
@@ -102,12 +122,17 @@ export default function Broadcast() {
   async function handleSend() {
     if (!name.trim() || !message.trim() || selectedContacts.length === 0) { toast.error('Preencha todos os campos'); return; }
     if (validCount === 0) { toast.error('Nenhum contato válido selecionado'); return; }
+    if (!delayValid) { toast.error('Configure o delay corretamente (máximo ≥ mínimo, ambos > 0)'); return; }
+    if (sending) return;
+    setSending(true);
     try {
       await create(name.trim(), message.trim(), selectedContacts, delayMin, delayMax);
       toast.success('Campanha iniciada!');
       setDialogOpen(false);
     } catch (err: any) {
       toast.error(err?.message || 'Erro ao criar campanha');
+    } finally {
+      setSending(false);
     }
   }
 
@@ -143,9 +168,29 @@ export default function Broadcast() {
     refetch();
   }
 
+  async function handleDelete(id: string, status: string) {
+    if (status === 'sending') {
+      toast.error('Cancele a campanha antes de excluir');
+      return;
+    }
+    if (!confirm('Excluir esta campanha permanentemente?')) return;
+    try {
+      await deleteBroadcast(id);
+      if (detailId === id) setDetailId(null);
+      toast.success('Campanha excluída');
+    } catch (err: any) {
+      toast.error(err?.message || 'Erro ao excluir');
+    }
+  }
+
   const statusBadge = (s: string) => {
     const map: Record<string, string> = { draft: 'bg-muted text-muted-foreground', sending: 'bg-yellow-500/20 text-yellow-600', done: 'bg-primary/20 text-primary', failed: 'bg-destructive/20 text-destructive', paused: 'bg-orange-500/20 text-orange-600', canceled: 'bg-muted text-muted-foreground' };
     return map[s] || '';
+  };
+
+  const statusLabel = (s: string) => {
+    const map: Record<string, string> = { draft: 'Rascunho', sending: 'Enviando', done: 'Concluída', failed: 'Falhou', paused: 'Pausada', canceled: 'Cancelada' };
+    return map[s] || s;
   };
 
   const detailBroadcast = broadcasts.find(b => b.id === detailId);
@@ -193,7 +238,7 @@ export default function Broadcast() {
                   <TableCell className="text-muted-foreground">{b.total_recipients || b.contacts_count}</TableCell>
                   <TableCell className="text-primary font-medium">{b.total_sent || 0}</TableCell>
                   <TableCell className="text-destructive font-medium">{b.total_failed || 0}</TableCell>
-                  <TableCell><Badge className={`text-[10px] border-0 ${statusBadge(b.status)}`}>{b.status}</Badge></TableCell>
+                  <TableCell><Badge className={`text-[10px] border-0 ${statusBadge(b.status)}`}>{statusLabel(b.status)}</Badge></TableCell>
                   <TableCell className="text-muted-foreground text-sm">{b.created_at ? format(new Date(b.created_at), 'dd/MM/yy HH:mm') : ''}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex gap-1 justify-end">
@@ -201,6 +246,7 @@ export default function Broadcast() {
                       {b.status === 'sending' && <Button variant="ghost" size="sm" className="h-7 text-xs text-orange-600" onClick={() => pauseBroadcast(b.id)}><Pause className="w-3 h-3" /></Button>}
                       {b.status === 'paused' && <Button variant="ghost" size="sm" className="h-7 text-xs text-primary" onClick={() => resumeBroadcast(b.id)}><Play className="w-3 h-3" /></Button>}
                       {(b.status === 'sending' || b.status === 'paused') && <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive" onClick={() => cancelBroadcast(b.id)}><XCircle className="w-3 h-3" /></Button>}
+                      {b.status !== 'sending' && <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive" onClick={() => handleDelete(b.id, b.status)}><Trash2 className="w-3 h-3" /></Button>}
                     </div>
                   </TableCell>
                 </TableRow>
@@ -217,19 +263,55 @@ export default function Broadcast() {
             {step === 1 && (
               <div className="space-y-3">
                 <div><Label className="text-foreground text-sm">Nome da campanha</Label><Input value={name} onChange={e => setName(e.target.value)} className="bg-muted/50 border-border mt-1" /></div>
-                <div><Label className="text-foreground text-sm">Mensagem</Label><Textarea value={message} onChange={e => setMessage(e.target.value)} className="bg-muted/50 border-border mt-1 min-h-[100px]" placeholder="Olá {{name}}, temos novidades..." /><p className="text-[10px] text-muted-foreground mt-1">Use {"{{name}}"} para personalizar</p></div>
+                <div>
+                  <Label className="text-foreground text-sm">Mensagem</Label>
+                  <Textarea value={message} onChange={e => setMessage(e.target.value)} className="bg-muted/50 border-border mt-1 min-h-[100px]" placeholder="Olá {{nome}}, temos novidades..." />
+                  <p className="text-[10px] text-muted-foreground mt-1">Use {"{{nome}}"} para personalizar com o nome do contato</p>
+                </div>
                 {message && (
                   <div className="bg-muted/30 rounded-lg p-3">
-                    <p className="text-[10px] text-muted-foreground mb-1">Preview:</p>
-                    <p className="text-sm text-foreground">{message.replace(/\{\{name\}\}/gi, 'João Silva')}</p>
+                    <p className="text-[10px] text-muted-foreground mb-1">Preview (exemplo):</p>
+                    <p className="text-sm text-foreground">{interpolatePreview(message, 'João Silva')}</p>
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-3">
-                  <div><Label className="text-foreground text-xs">Delay mínimo (seg)</Label><Input type="number" step="0.5" min="0.5" value={delayMin} onChange={e => setDelayMin(Number(e.target.value))} className="bg-muted/50 border-border mt-1" /></div>
-                  <div><Label className="text-foreground text-xs">Delay máximo (seg)</Label><Input type="number" step="0.5" min="1" value={delayMax} onChange={e => setDelayMax(Number(e.target.value))} className="bg-muted/50 border-border mt-1" /></div>
+                  <div>
+                    <Label className="text-foreground text-xs">Delay mínimo (segundos)</Label>
+                    <Input
+                      type="number"
+                      step="1"
+                      min="1"
+                      value={delayMinStr}
+                      onChange={e => setDelayMinStr(e.target.value)}
+                      onBlur={() => {
+                        const v = parseFloat(delayMinStr);
+                        if (!delayMinStr || isNaN(v) || v < 1) setDelayMinStr('1');
+                      }}
+                      className="bg-muted/50 border-border mt-1"
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-foreground text-xs">Delay máximo (segundos)</Label>
+                    <Input
+                      type="number"
+                      step="1"
+                      min="1"
+                      value={delayMaxStr}
+                      onChange={e => setDelayMaxStr(e.target.value)}
+                      onBlur={() => {
+                        const v = parseFloat(delayMaxStr);
+                        if (!delayMaxStr || isNaN(v) || v < 1) setDelayMaxStr('1');
+                        else if (v < delayMin) setDelayMaxStr(String(delayMin));
+                      }}
+                      className="bg-muted/50 border-border mt-1"
+                    />
+                  </div>
                 </div>
+                {!delayValid && delayMinStr && delayMaxStr && (
+                  <p className="text-[10px] text-destructive">Delay máximo deve ser ≥ mínimo, e ambos devem ser &gt; 0</p>
+                )}
                 <p className="text-[10px] text-muted-foreground">Intervalo aleatório entre {delayMin}s e {delayMax}s por mensagem</p>
-                <Button onClick={() => setStep(2)} disabled={!name.trim() || !message.trim()} className="w-full">Próximo <ArrowRight className="w-4 h-4 ml-1" /></Button>
+                <Button onClick={() => setStep(2)} disabled={!name.trim() || !message.trim() || !delayValid} className="w-full">Próximo <ArrowRight className="w-4 h-4 ml-1" /></Button>
               </div>
             )}
             {step === 2 && (
@@ -280,10 +362,18 @@ export default function Broadcast() {
                   <div className="flex justify-between text-sm"><span className="text-muted-foreground">Campanha</span><span className="text-foreground font-medium">{name}</span></div>
                   <div className="flex justify-between text-sm"><span className="text-muted-foreground">Contatos</span><span className="text-foreground font-medium">{selectedContacts.length} ({validCount} válidos)</span></div>
                   <div className="flex justify-between text-sm"><span className="text-muted-foreground">Intervalo</span><span className="text-foreground font-medium">{delayMin}s — {delayMax}s</span></div>
-                  <div className="text-sm"><span className="text-muted-foreground">Mensagem:</span><p className="text-foreground mt-1 bg-muted/50 p-2 rounded-lg text-xs">{message}</p></div>
+                  <div className="text-sm">
+                    <span className="text-muted-foreground">Mensagem:</span>
+                    <p className="text-foreground mt-1 bg-muted/50 p-2 rounded-lg text-xs">{interpolatePreview(message, 'João Silva')}</p>
+                  </div>
                   {invalidCount > 0 && <p className="text-xs text-destructive flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> {invalidCount} contato(s) com número inválido serão ignorados</p>}
                 </div>
-                <div className="flex gap-2"><Button variant="outline" onClick={() => setStep(2)} className="flex-1"><ArrowLeft className="w-4 h-4 mr-1" /> Voltar</Button><Button onClick={handleSend} className="flex-1"><Send className="w-4 h-4 mr-1" /> Iniciar Campanha</Button></div>
+                <div className="flex gap-2">
+                  <Button variant="outline" onClick={() => setStep(2)} className="flex-1"><ArrowLeft className="w-4 h-4 mr-1" /> Voltar</Button>
+                  <Button onClick={handleSend} disabled={sending} className="flex-1">
+                    {sending ? <><Loader2 className="w-4 h-4 mr-1 animate-spin" /> Iniciando...</> : <><Send className="w-4 h-4 mr-1" /> Iniciar Campanha</>}
+                  </Button>
+                </div>
               </div>
             )}
           </DialogContent>
@@ -320,13 +410,16 @@ export default function Broadcast() {
                 )}
 
                 <div className="flex items-center gap-2">
-                  <Badge className={`text-[10px] border-0 ${statusBadge(detailBroadcast.status)}`}>{detailBroadcast.status}</Badge>
+                  <Badge className={`text-[10px] border-0 ${statusBadge(detailBroadcast.status)}`}>{statusLabel(detailBroadcast.status)}</Badge>
                   {detailBroadcast.status === 'sending' && <Button variant="outline" size="sm" className="h-7 text-xs text-orange-600" onClick={() => pauseBroadcast(detailBroadcast.id)}><Pause className="w-3 h-3 mr-1" /> Pausar</Button>}
                   {detailBroadcast.status === 'paused' && <Button variant="outline" size="sm" className="h-7 text-xs text-primary" onClick={() => resumeBroadcast(detailBroadcast.id)}><Play className="w-3 h-3 mr-1" /> Retomar</Button>}
                   {(detailBroadcast.status === 'sending' || detailBroadcast.status === 'paused') && <Button variant="outline" size="sm" className="h-7 text-xs text-destructive" onClick={() => cancelBroadcast(detailBroadcast.id)}><XCircle className="w-3 h-3 mr-1" /> Cancelar</Button>}
+                  {detailBroadcast.status !== 'sending' && (
+                    <Button variant="outline" size="sm" className="h-7 text-xs text-destructive" onClick={() => handleDelete(detailBroadcast.id, detailBroadcast.status)}><Trash2 className="w-3 h-3 mr-1" /> Excluir</Button>
+                  )}
                 </div>
 
-                <div className="glass-card p-3"><p className="text-xs text-muted-foreground">Mensagem:</p><p className="text-sm text-foreground mt-1">{detailBroadcast.message}</p></div>
+                <div className="glass-card p-3"><p className="text-xs text-muted-foreground">Mensagem (template):</p><p className="text-sm text-foreground mt-1">{detailBroadcast.message}</p></div>
 
                 {/* Recipient search */}
                 <div className="relative">

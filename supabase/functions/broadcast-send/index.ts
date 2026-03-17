@@ -17,15 +17,36 @@ function normalizePhone(input: string): string {
   return digits;
 }
 
-function randomDelay(min: number, max: number): number {
+function randomDelay(minSec: number, maxSec: number): number {
+  const min = Math.max(0.5, minSec);
+  const max = Math.max(min, maxSec);
   return (min + Math.random() * (max - min)) * 1000;
+}
+
+/**
+ * Interpolate template variables in a message.
+ * Supports: {{nome}}, {{name}}, {{telefone}}, {{phone}}
+ */
+function interpolateMessage(template: string, contact: { name?: string; phone?: string }): string {
+  const name = (contact.name || "").trim();
+  const phone = (contact.phone || "").trim();
+  const fallbackName = name || phone || "Olá";
+
+  let result = template;
+  // Replace {{nome}} and {{name}} (case-insensitive)
+  result = result.replace(/\{\{nome\}\}/gi, fallbackName);
+  result = result.replace(/\{\{name\}\}/gi, fallbackName);
+  // Replace {{telefone}} and {{phone}}
+  result = result.replace(/\{\{telefone\}\}/gi, phone);
+  result = result.replace(/\{\{phone\}\}/gi, phone);
+  return result;
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
   try {
-    const { broadcastId, token, delayMin = 1.5, delayMax = 3 } = await req.json();
+    const { broadcastId, token, delayMin = 20, delayMax = 25 } = await req.json();
     if (!broadcastId) throw new Error("broadcastId é obrigatório");
     if (!token) throw new Error("token do WhatsApp é obrigatório");
 
@@ -54,11 +75,16 @@ serve(async (req) => {
       .select("id, contact_id, status, customers:contact_id(id, name, phone)")
       .eq("broadcast_id", broadcastId).eq("status", "pending");
 
-    console.log(`[broadcast-send] Processing ${recipients?.length || 0} recipients, delay ${delayMin}-${delayMax}s`);
+    const delayMinSec = Number(delayMin) || 1;
+    const delayMaxSec = Math.max(Number(delayMax) || 1, delayMinSec);
+
+    console.log(`[broadcast-send] Processing ${recipients?.length || 0} recipients, delay ${delayMinSec}-${delayMaxSec}s`);
 
     let totalSent = 0, totalFailed = 0;
 
-    for (const recipient of (recipients || [])) {
+    for (let i = 0; i < (recipients || []).length; i++) {
+      const recipient = recipients![i];
+
       // Check if paused/canceled
       const { data: currentBc } = await db.from("broadcasts").select("status").eq("id", broadcastId).single();
       if (currentBc?.status === "paused" || currentBc?.status === "canceled") {
@@ -80,7 +106,11 @@ serve(async (req) => {
         continue;
       }
 
-      const personalizedMsg = String(broadcast.message || "").replace(/\{\{name\}\}/gi, contact.name || "");
+      // Interpolate variables per recipient
+      const personalizedMsg = interpolateMessage(String(broadcast.message || ""), {
+        name: contact.name || "",
+        phone: contact.phone || "",
+      });
 
       // ── Find or create conversation for this contact ──
       let conversationId: string | null = null;
@@ -130,7 +160,7 @@ serve(async (req) => {
           throw new Error(data?.error || data?.message || `HTTP ${res.status}`);
         }
 
-        // ── Persist outbound message to messages table ──
+        // ── Persist outbound message ──
         if (conversationId) {
           await db.from("messages").insert({
             conversation_id: conversationId,
@@ -141,7 +171,6 @@ serve(async (req) => {
             status: "sent",
           });
 
-          // Update conversation timestamp
           await db.from("conversations").update({
             last_message_at: new Date().toISOString(),
           }).eq("id", conversationId);
@@ -153,7 +182,6 @@ serve(async (req) => {
       } catch (err: any) {
         console.error(`[broadcast-send] Failed ${phone}:`, err?.message);
 
-        // Persist failed message too
         if (conversationId) {
           await db.from("messages").insert({
             conversation_id: conversationId,
@@ -172,8 +200,12 @@ serve(async (req) => {
       // Update running totals
       await db.from("broadcasts").update({ total_sent: totalSent, total_failed: totalFailed }).eq("id", broadcastId);
 
-      // Random delay with jitter
-      await sleep(randomDelay(delayMin, delayMax));
+      // Random delay between recipients (skip after last one)
+      if (i < (recipients!.length - 1)) {
+        const delayMs = randomDelay(delayMinSec, delayMaxSec);
+        console.log(`[broadcast-send] Waiting ${Math.round(delayMs / 1000)}s before next...`);
+        await sleep(delayMs);
+      }
     }
 
     const finalStatus = totalSent > 0 ? "done" : totalFailed > 0 ? "failed" : "done";
