@@ -234,7 +234,10 @@ export type Database = {
         Row: {
           contacts_count: number | null
           created_at: string | null
+          delay_max_seconds: number
+          delay_min_seconds: number
           id: string
+          last_message_preview: string | null
           message: string
           name: string
           sent_at: string | null
@@ -249,7 +252,10 @@ export type Database = {
         Insert: {
           contacts_count?: number | null
           created_at?: string | null
+          delay_max_seconds?: number
+          delay_min_seconds?: number
           id?: string
+          last_message_preview?: string | null
           message: string
           name: string
           sent_at?: string | null
@@ -264,7 +270,10 @@ export type Database = {
         Update: {
           contacts_count?: number | null
           created_at?: string | null
+          delay_max_seconds?: number
+          delay_min_seconds?: number
           id?: string
+          last_message_preview?: string | null
           message?: string
           name?: string
           sent_at?: string | null
@@ -407,7 +416,9 @@ export type Database = {
           customer_id: string
           id: string
           last_message_at: string | null
+          last_message_preview: string | null
           status: string
+          unread_count: number
           workspace_id: string | null
         }
         Insert: {
@@ -416,7 +427,9 @@ export type Database = {
           customer_id: string
           id?: string
           last_message_at?: string | null
+          last_message_preview?: string | null
           status?: string
+          unread_count?: number
           workspace_id?: string | null
         }
         Update: {
@@ -425,7 +438,9 @@ export type Database = {
           customer_id?: string
           id?: string
           last_message_at?: string | null
+          last_message_preview?: string | null
           status?: string
+          unread_count?: number
           workspace_id?: string | null
         }
         Relationships: [
