@@ -47,13 +47,12 @@ export async function sendAndPersistMessage({
 }) {
   const normalizedPhone = normalizePhone(customerPhone);
 
-  // 1. Send via WhatsApp API
+  // 1. Send via WhatsApp API (UAZAPI uses token as path param)
   const apiUrl = "https://ipazua.uazapi.com";
-  const response = await fetch(`${apiUrl}/send/text`, {
+  const response = await fetch(`${apiUrl}/${instanceToken}/send/text`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${instanceToken}`,
     },
     body: JSON.stringify({ number: normalizedPhone, text: content }),
   });
