@@ -31,6 +31,7 @@ export default function Inbox() {
       .select("id, token")
       .eq("workspace_id", workspace.id)
       .eq("is_active", true)
+      .not("token", "is", null)
       .limit(1)
       .single()
       .then(({ data }) => setInstance(data));
